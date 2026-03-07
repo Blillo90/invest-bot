@@ -1,21 +1,22 @@
-# Reporte diario — 2026-02-27
+# Reporte diario — 2026-03-06
 
 ## Resumen
-- Barras nuevas insertadas: **0** (desde 2026-03-01 hasta 2026-03-01)
-- Equity (pre): **99972.00**
-- Equity (post): **99972.00**
-- Cash: **85750.00**
-- Exposición: **14.23%**
-- Drawdown (vs pico): **0.00%**
-- Target por posición (aprox): **4748.67**
+- Barras nuevas insertadas: **0** (desde 2026-03-08 hasta 2026-03-07)
+- Equity (pre): **99238.05**
+- Equity (post): **99238.05**
+- Cash: **80666.83**
+- Exposición: **18.71%**
+- Drawdown (vs pico): **-0.73%**
+- Target por posición (aprox): **4713.81**
 
 ## Trades de hoy
 - (sin trades hoy)
 
 ## Posiciones actuales
-- **COST**: 4.6899 sh | avg 1012.81 | close 1010.79 | mv 4740.52 | pnl -0.20%
-- **KO**: 58.1231 sh | avg 81.72 | close 81.56 | mv 4740.52 | pnl -0.20%
-- **PG**: 28.3524 sh | avg 167.53 | close 167.20 | mv 4740.52 | pnl -0.20%
+- **BRK-B**: 9.4350 sh | avg 499.75 | close 498.98 | mv 4707.87 | pnl -0.15%
+- **COST**: 4.6899 sh | avg 1012.81 | close 998.10 | mv 4681.00 | pnl -1.45%
+- **CVX**: 24.7825 sh | avg 190.26 | close 189.94 | mv 4707.19 | pnl -0.17%
+- **KO**: 58.1231 sh | avg 81.72 | close 77.04 | mv 4477.80 | pnl -5.73%
 
 ## Alertas / avisos
 - ⚠️ No se insertaron barras nuevas (finde/holiday o sin datos).

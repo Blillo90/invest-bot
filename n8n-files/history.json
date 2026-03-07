@@ -207,5 +207,71 @@
     "drawdownPct": 0,
     "targetPerPos": 4748.67,
     "rawLen": 856
+  },
+  {
+    "ts": "2026-03-07T09:01:24.459Z",
+    "slot": "OPEN",
+    "equityPre": 99972,
+    "equityPost": 99972,
+    "cash": 85750,
+    "exposurePct": 14.23,
+    "drawdownPct": 0,
+    "targetPerPos": 4748.67,
+    "rawLen": 856
+  },
+  {
+    "ts": "2026-03-07T10:00:50.035Z",
+    "slot": "OPEN",
+    "equityPre": 99972,
+    "equityPost": 99972,
+    "cash": 85750,
+    "exposurePct": 14.23,
+    "drawdownPct": 0,
+    "targetPerPos": 4748.67,
+    "rawLen": 856
+  },
+  {
+    "ts": "2026-03-07T10:14:44.783Z",
+    "slot": "OPEN",
+    "equityPre": 99972,
+    "equityPost": 99972,
+    "cash": 85750,
+    "exposurePct": 14.23,
+    "drawdownPct": 0,
+    "targetPerPos": 4748.67,
+    "rawLen": 856
+  },
+  {
+    "ts": "2026-03-07T10:20:11.374Z",
+    "slot": "OPEN",
+    "equityPre": 99238.05,
+    "equityPost": 99238.05,
+    "cash": 80666.83,
+    "exposurePct": 18.71,
+    "drawdownPct": null,
+    "targetPerPos": 4713.81,
+    "rawLen": 934
+  },
+  {
+    "ts": "2026-03-07T10:26:48.877Z",
+    "slot": "MID",
+    "equityPre": 99238.05,
+    "equityPost": 99238.05,
+    "cash": 80666.83,
+    "exposurePct": 18.71,
+    "drawdownPct": null,
+    "targetPerPos": 4713.81,
+    "rawLen": 934
+  },
+  {
+    "ts": "2026-03-07T10:29:46.851Z",
+    "slot": "MID",
+    "equityPre": 99238.05,
+    "equityPost": 99238.05,
+    "cash": 80666.83,
+    "exposurePct": 18.71,
+    "drawdownPct": null,
+    "targetPerPos": 4713.81,
+    "rawLen": 934
   }
 ]
