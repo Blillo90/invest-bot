@@ -1,9 +1,8 @@
 // app/page.tsx
 
-//Invest Dashboard TEST MALAGUITA
-
 import EquityChart from "./components/EquityChart";
-import { readFile } from "fs/promises";
+import { readFile, readdir } from "fs/promises";
+import path from "path";
 
 type Snapshot = {
   ts: string;
@@ -18,6 +17,7 @@ type Snapshot = {
 };
 
 type Trade = {
+  reportDate: string;
   side: string;
   symbol: string;
   shares: number | null;
@@ -56,6 +56,15 @@ function fmtDate(iso?: string) {
   if (!iso) return "—";
   const d = new Date(iso);
   return d.toLocaleString("es-ES", { hour12: false });
+}
+
+function yyyyMmDdFromIso(iso?: string) {
+  if (!iso) return "";
+  const d = new Date(iso);
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
 }
 
 function SlotPill({ slot }: { slot?: string }) {
@@ -107,7 +116,7 @@ function Card({
   );
 }
 
-function parseTradesFromMarkdown(md: string): Trade[] {
+function parseTradesFromMarkdown(md: string, reportDate: string): Trade[] {
   const sectionMatch = md.match(/## Trades de hoy([\s\S]*?)(## |$)/);
   if (!sectionMatch) return [];
 
@@ -130,6 +139,7 @@ function parseTradesFromMarkdown(md: string): Trade[] {
     if (!match) continue;
 
     trades.push({
+      reportDate,
       side: match[1],
       symbol: match[2],
       shares: Number(match[3]),
@@ -145,10 +155,80 @@ function parseTradesFromMarkdown(md: string): Trade[] {
 async function getLatestTrades(): Promise<Trade[]> {
   try {
     const md = await readFile("/home/ubuntu/n8n-files/latest.md", "utf8");
-    return parseTradesFromMarkdown(md);
+    return parseTradesFromMarkdown(md, "latest");
   } catch {
     return [];
   }
+}
+
+async function getTradesFromReportsForDay(day: string): Promise<Trade[]> {
+  try {
+    const reportsDir = "/home/ubuntu/quant-bot/reports";
+    const files = await readdir(reportsDir);
+
+    const mdFiles = files
+      .filter((f) => f.endsWith(".md"))
+      .filter((f) => f !== "latest.md")
+      .sort();
+
+    const allTrades: Trade[] = [];
+
+    for (const file of mdFiles) {
+      const reportDate = path.basename(file, ".md");
+      if (reportDate !== day) continue;
+
+      const fullPath = path.join(reportsDir, file);
+      const md = await readFile(fullPath, "utf8");
+      allTrades.push(...parseTradesFromMarkdown(md, reportDate));
+    }
+
+    return allTrades;
+  } catch {
+    return [];
+  }
+}
+
+function TradesTable({
+  trades,
+  emptyText,
+}: {
+  trades: Trade[];
+  emptyText: string;
+}) {
+  if (trades.length === 0) {
+    return <div className="text-sm text-zinc-500">{emptyText}</div>;
+  }
+
+  return (
+    <div className="overflow-x-auto">
+      <table className="w-full text-sm">
+        <thead className="text-left text-xs text-zinc-500">
+          <tr>
+            <th className="pb-2 pr-4">Acción</th>
+            <th className="pb-2 pr-4">Ticker</th>
+            <th className="pb-2 pr-4">Shares</th>
+            <th className="pb-2 pr-4">Close</th>
+            <th className="pb-2 pr-4">Precio efectivo</th>
+            <th className="pb-2">Motivo</th>
+          </tr>
+        </thead>
+        <tbody>
+          {trades.map((t, i) => (
+            <tr key={`${t.reportDate}-${t.symbol}-${i}`} className="border-t border-zinc-100">
+              <td className="py-2 pr-4">
+                <SidePill side={t.side} />
+              </td>
+              <td className="py-2 pr-4 font-medium">{t.symbol}</td>
+              <td className="py-2 pr-4">{fmtNum(t.shares, 4)}</td>
+              <td className="py-2 pr-4">{fmtNum(t.close, 2)}</td>
+              <td className="py-2 pr-4">{fmtNum(t.effective, 2)}</td>
+              <td className="py-2">{t.reason}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
 }
 
 export default async function Page() {
@@ -166,12 +246,13 @@ export default async function Page() {
   const last = sorted.length ? sorted[sorted.length - 1] : null;
   const equity = last?.equityPost ?? last?.equityPre ?? null;
 
-  const trades = await getLatestTrades();
+  const latestTrades = await getLatestTrades();
+  const currentDay = yyyyMmDdFromIso(last?.ts);
+  const dayTrades = await getTradesFromReportsForDay(currentDay);
 
   return (
     <main className="min-h-screen bg-zinc-50">
       <div className="mx-auto max-w-6xl px-4 py-10">
-        {/* HEADER */}
         <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
           <div>
             <h1 className="text-2xl font-semibold text-zinc-900">
@@ -189,7 +270,6 @@ export default async function Page() {
           </div>
         </div>
 
-        {/* CARDS */}
         <div className="mt-6 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
           <Card label="Equity" value={fmtMoney(equity)} />
           <Card label="Cash" value={fmtMoney(last?.cash)} />
@@ -197,52 +277,32 @@ export default async function Page() {
           <Card label="Drawdown" value={fmtPct(last?.drawdownPct)} />
         </div>
 
-        {/* CHART */}
         <div className="mt-6">
           <EquityChart data={sorted} />
         </div>
 
-        {/* TRADES */}
         <div className="mt-6 rounded-2xl bg-white p-4 shadow-sm ring-1 ring-zinc-200">
           <div className="mb-4 text-sm font-medium text-zinc-900">
             Operaciones del último reporte
           </div>
 
-          {trades.length === 0 ? (
-            <div className="text-sm text-zinc-500">Sin operaciones en este slot.</div>
-          ) : (
-            <div className="overflow-x-auto">
-              <table className="w-full text-sm">
-                <thead className="text-left text-xs text-zinc-500">
-                  <tr>
-                    <th className="pb-2 pr-4">Acción</th>
-                    <th className="pb-2 pr-4">Ticker</th>
-                    <th className="pb-2 pr-4">Shares</th>
-                    <th className="pb-2 pr-4">Close</th>
-                    <th className="pb-2 pr-4">Precio efectivo</th>
-                    <th className="pb-2">Motivo</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {trades.map((t, i) => (
-                    <tr key={`${t.symbol}-${i}`} className="border-t border-zinc-100">
-                      <td className="py-2 pr-4">
-                        <SidePill side={t.side} />
-                      </td>
-                      <td className="py-2 pr-4 font-medium">{t.symbol}</td>
-                      <td className="py-2 pr-4">{fmtNum(t.shares, 4)}</td>
-                      <td className="py-2 pr-4">{fmtNum(t.close, 2)}</td>
-                      <td className="py-2 pr-4">{fmtNum(t.effective, 2)}</td>
-                      <td className="py-2">{t.reason}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
+          <TradesTable
+            trades={latestTrades}
+            emptyText="Sin operaciones en este slot."
+          />
         </div>
 
-        {/* HISTORY */}
+        <div className="mt-6 rounded-2xl bg-white p-4 shadow-sm ring-1 ring-zinc-200">
+          <div className="mb-4 text-sm font-medium text-zinc-900">
+            Operaciones del día
+          </div>
+
+          <TradesTable
+            trades={dayTrades}
+            emptyText="Sin operaciones registradas en este día."
+          />
+        </div>
+
         <div className="mt-6 rounded-2xl bg-white p-4 shadow-sm ring-1 ring-zinc-200">
           <div className="mb-4 text-sm font-medium text-zinc-900">Historial</div>
 
