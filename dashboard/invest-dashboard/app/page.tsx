@@ -1,6 +1,7 @@
 // app/page.tsx
 
 import EquityChart from "./components/EquityChart";
+import { readFile } from "fs/promises";
 
 type Snapshot = {
   ts: string;
@@ -14,6 +15,15 @@ type Snapshot = {
   rawLen?: number | null;
 };
 
+type Trade = {
+  side: string;
+  symbol: string;
+  shares: number | null;
+  close: number | null;
+  effective: number | null;
+  reason: string;
+};
+
 function fmtMoney(v?: number | null) {
   if (v === null || v === undefined || Number.isNaN(v)) return "—";
   return new Intl.NumberFormat("es-ES", {
@@ -23,11 +33,21 @@ function fmtMoney(v?: number | null) {
   }).format(v);
 }
 
-function fmtPct(v?: number | null) {
+function fmtNum(v?: number | null, digits = 2) {
   if (v === null || v === undefined || Number.isNaN(v)) return "—";
   return new Intl.NumberFormat("es-ES", {
-    maximumFractionDigits: 2,
-  }).format(v) + "%";
+    minimumFractionDigits: digits,
+    maximumFractionDigits: digits,
+  }).format(v);
+}
+
+function fmtPct(v?: number | null) {
+  if (v === null || v === undefined || Number.isNaN(v)) return "—";
+  return (
+    new Intl.NumberFormat("es-ES", {
+      maximumFractionDigits: 2,
+    }).format(v) + "%"
+  );
 }
 
 function fmtDate(iso?: string) {
@@ -54,6 +74,22 @@ function SlotPill({ slot }: { slot?: string }) {
   return <span className={`${base} ${cls}`}>{s}</span>;
 }
 
+function SidePill({ side }: { side?: string }) {
+  const s = (side || "—").toUpperCase();
+
+  const base =
+    "inline-flex items-center rounded-full px-3 py-1 text-xs font-semibold ring-1 ring-inset";
+
+  const cls =
+    s === "BUY"
+      ? "bg-emerald-50 text-emerald-700 ring-emerald-200"
+      : s === "SELL"
+      ? "bg-rose-50 text-rose-700 ring-rose-200"
+      : "bg-zinc-50 text-zinc-700 ring-zinc-200";
+
+  return <span className={`${base} ${cls}`}>{s}</span>;
+}
+
 function Card({
   label,
   value,
@@ -64,11 +100,53 @@ function Card({
   return (
     <div className="rounded-2xl bg-white p-4 shadow-sm ring-1 ring-zinc-200">
       <div className="text-sm text-zinc-500">{label}</div>
-      <div className="mt-2 text-2xl font-semibold text-zinc-900">
-        {value}
-      </div>
+      <div className="mt-2 text-2xl font-semibold text-zinc-900">{value}</div>
     </div>
   );
+}
+
+function parseTradesFromMarkdown(md: string): Trade[] {
+  const sectionMatch = md.match(/## Trades de hoy([\s\S]*?)(## |$)/);
+  if (!sectionMatch) return [];
+
+  const section = sectionMatch[1];
+
+  const lines = section
+    .split("\n")
+    .map((l) => l.trim())
+    .filter((l) => l.startsWith("-"));
+
+  const trades: Trade[] = [];
+
+  for (const line of lines) {
+    if (line.includes("(sin trades hoy)")) continue;
+
+    const match = line.match(
+      /- \*\*(BUY|SELL)\s+([A-Z0-9.\-]+)\*\*\s+\|\s+shares\s+([\d.]+)\s+\|\s+close\s+([\d.]+)\s+\|\s+eff\s+([\d.]+)\s+\|\s+(.+)$/
+    );
+
+    if (!match) continue;
+
+    trades.push({
+      side: match[1],
+      symbol: match[2],
+      shares: Number(match[3]),
+      close: Number(match[4]),
+      effective: Number(match[5]),
+      reason: match[6],
+    });
+  }
+
+  return trades;
+}
+
+async function getLatestTrades(): Promise<Trade[]> {
+  try {
+    const md = await readFile("/home/ubuntu/n8n-files/latest.md", "utf8");
+    return parseTradesFromMarkdown(md);
+  } catch {
+    return [];
+  }
 }
 
 export default async function Page() {
@@ -84,13 +162,13 @@ export default async function Page() {
   );
 
   const last = sorted.length ? sorted[sorted.length - 1] : null;
-
   const equity = last?.equityPost ?? last?.equityPre ?? null;
+
+  const trades = await getLatestTrades();
 
   return (
     <main className="min-h-screen bg-zinc-50">
       <div className="mx-auto max-w-6xl px-4 py-10">
-
         {/* HEADER */}
         <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
           <div>
@@ -99,9 +177,7 @@ export default async function Page() {
             </h1>
             <p className="text-sm text-zinc-600">
               Última actualización:{" "}
-              <span className="font-medium">
-                {fmtDate(last?.ts)}
-              </span>
+              <span className="font-medium">{fmtDate(last?.ts)}</span>
             </p>
           </div>
 
@@ -124,11 +200,49 @@ export default async function Page() {
           <EquityChart data={sorted} />
         </div>
 
-        {/* TABLE */}
+        {/* TRADES */}
         <div className="mt-6 rounded-2xl bg-white p-4 shadow-sm ring-1 ring-zinc-200">
-          <div className="text-sm font-medium text-zinc-900 mb-4">
-            Historial
+          <div className="mb-4 text-sm font-medium text-zinc-900">
+            Operaciones del último reporte
           </div>
+
+          {trades.length === 0 ? (
+            <div className="text-sm text-zinc-500">Sin operaciones en este slot.</div>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead className="text-left text-xs text-zinc-500">
+                  <tr>
+                    <th className="pb-2 pr-4">Acción</th>
+                    <th className="pb-2 pr-4">Ticker</th>
+                    <th className="pb-2 pr-4">Shares</th>
+                    <th className="pb-2 pr-4">Close</th>
+                    <th className="pb-2 pr-4">Precio efectivo</th>
+                    <th className="pb-2">Motivo</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {trades.map((t, i) => (
+                    <tr key={`${t.symbol}-${i}`} className="border-t border-zinc-100">
+                      <td className="py-2 pr-4">
+                        <SidePill side={t.side} />
+                      </td>
+                      <td className="py-2 pr-4 font-medium">{t.symbol}</td>
+                      <td className="py-2 pr-4">{fmtNum(t.shares, 4)}</td>
+                      <td className="py-2 pr-4">{fmtNum(t.close, 2)}</td>
+                      <td className="py-2 pr-4">{fmtNum(t.effective, 2)}</td>
+                      <td className="py-2">{t.reason}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+
+        {/* HISTORY */}
+        <div className="mt-6 rounded-2xl bg-white p-4 shadow-sm ring-1 ring-zinc-200">
+          <div className="mb-4 text-sm font-medium text-zinc-900">Historial</div>
 
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
@@ -147,24 +261,14 @@ export default async function Page() {
                   const eq = row.equityPost ?? row.equityPre;
                   return (
                     <tr key={i} className="border-t border-zinc-100">
-                      <td className="py-2 pr-4">
-                        {fmtDate(row.ts)}
-                      </td>
+                      <td className="py-2 pr-4">{fmtDate(row.ts)}</td>
                       <td className="py-2 pr-4">
                         <SlotPill slot={row.slot} />
                       </td>
-                      <td className="py-2 pr-4 font-medium">
-                        {fmtMoney(eq)}
-                      </td>
-                      <td className="py-2 pr-4">
-                        {fmtMoney(row.cash)}
-                      </td>
-                      <td className="py-2 pr-4">
-                        {fmtPct(row.exposurePct)}
-                      </td>
-                      <td className="py-2">
-                        {fmtPct(row.drawdownPct)}
-                      </td>
+                      <td className="py-2 pr-4 font-medium">{fmtMoney(eq)}</td>
+                      <td className="py-2 pr-4">{fmtMoney(row.cash)}</td>
+                      <td className="py-2 pr-4">{fmtPct(row.exposurePct)}</td>
+                      <td className="py-2">{fmtPct(row.drawdownPct)}</td>
                     </tr>
                   );
                 })}
@@ -172,7 +276,6 @@ export default async function Page() {
             </table>
           </div>
         </div>
-
       </div>
     </main>
   );
