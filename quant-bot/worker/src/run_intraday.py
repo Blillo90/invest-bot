@@ -217,7 +217,7 @@ if __name__ == "__main__":
     print("NUM TRADES INSERTED:", len(inserted) if inserted is not None else "None")
 
     if inserted:
-        print("PRIMER TRADE:", inserted[0])
-        print("CLAVES PRIMER TRADE:", list(inserted[0].keys()))
+        print("TIPO DE inserted:", type(inserted))
+        print("VALOR DE inserted:", inserted)
     report_path = core.write_report(cfg, con, asof, inserted, start, end, sim)
     print(f"OK ({mode}). Reporte generado: {report_path}")
