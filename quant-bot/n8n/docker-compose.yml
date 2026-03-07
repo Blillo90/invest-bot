@@ -1,0 +1,36 @@
+services:
+  n8n:
+    image: n8nio/n8n:2.9.4
+    container_name: n8n
+    restart: unless-stopped
+
+    ports:
+      - "127.0.0.1:5678:5678"
+
+    environment:
+      # Horario mercado USA
+      - TZ=America/New_York
+      - GENERIC_TIMEZONE=America/New_York
+
+      # Clave fija (muy importante)
+      - N8N_ENCRYPTION_KEY=4c9d40c13fdb36c60b27cb6955a0650cb9ebccae4ea0c1525f6fdbb19f05303f
+
+      - EXECUTIONS_MODE=regular
+
+      # Auth básica
+      - N8N_BASIC_AUTH_ACTIVE=true
+      - N8N_BASIC_AUTH_USER=admin
+      - N8N_BASIC_AUTH_PASSWORD=CAMBIA_ESTE_PASSWORD
+
+      - EXECUTIONS_DATA_SAVE_ON_SUCCESS=all
+      - EXECUTIONS_DATA_SAVE_ON_ERROR=all
+      - N8N_ENABLE_COMMAND_EXECUTION=true
+      - N8N_LOG_LEVEL=info
+
+    volumes:
+      - n8n_data:/home/node/.n8n
+      - /home/ubuntu/quant-bot:/home/node/quant-bot
+      - /home/ubuntu/n8n-files:/home/node/.n8n-files
+
+volumes:
+  n8n_data:
