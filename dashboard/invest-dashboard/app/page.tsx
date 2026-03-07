@@ -1,8 +1,7 @@
 // app/page.tsx
 
 import EquityChart from "./components/EquityChart";
-import { readFile, readdir } from "fs/promises";
-import path from "path";
+import { readFile } from "fs/promises";
 
 type Snapshot = {
   ts: string;
@@ -17,7 +16,6 @@ type Snapshot = {
 };
 
 type Trade = {
-  reportDate: string;
   side: string;
   symbol: string;
   shares: number | null;
@@ -56,15 +54,6 @@ function fmtDate(iso?: string) {
   if (!iso) return "—";
   const d = new Date(iso);
   return d.toLocaleString("es-ES", { hour12: false });
-}
-
-function yyyyMmDdFromIso(iso?: string) {
-  if (!iso) return "";
-  const d = new Date(iso);
-  const y = d.getFullYear();
-  const m = String(d.getMonth() + 1).padStart(2, "0");
-  const day = String(d.getDate()).padStart(2, "0");
-  return `${y}-${m}-${day}`;
 }
 
 function SlotPill({ slot }: { slot?: string }) {
@@ -116,7 +105,33 @@ function Card({
   );
 }
 
-function parseTradesFromMarkdown(md: string, reportDate: string): Trade[] {
+function PnlCard({
+  label,
+  value,
+  tone,
+}: {
+  label: string;
+  value: string;
+  tone?: "positive" | "negative" | "neutral";
+}) {
+  const valueClass =
+    tone === "positive"
+      ? "text-emerald-600"
+      : tone === "negative"
+      ? "text-rose-600"
+      : "text-zinc-900";
+
+  return (
+    <div className="rounded-2xl bg-white p-4 shadow-sm ring-1 ring-zinc-200">
+      <div className="text-sm text-zinc-500">{label}</div>
+      <div className={`mt-2 text-2xl font-semibold ${valueClass}`}>
+        {value}
+      </div>
+    </div>
+  );
+}
+
+function parseTradesFromMarkdown(md: string): Trade[] {
   const sectionMatch = md.match(/## Trades de hoy([\s\S]*?)(## |$)/);
   if (!sectionMatch) return [];
 
@@ -139,7 +154,6 @@ function parseTradesFromMarkdown(md: string, reportDate: string): Trade[] {
     if (!match) continue;
 
     trades.push({
-      reportDate,
       side: match[1],
       symbol: match[2],
       shares: Number(match[3]),
@@ -155,80 +169,10 @@ function parseTradesFromMarkdown(md: string, reportDate: string): Trade[] {
 async function getLatestTrades(): Promise<Trade[]> {
   try {
     const md = await readFile("/home/ubuntu/n8n-files/latest.md", "utf8");
-    return parseTradesFromMarkdown(md, "latest");
+    return parseTradesFromMarkdown(md);
   } catch {
     return [];
   }
-}
-
-async function getTradesFromReportsForDay(day: string): Promise<Trade[]> {
-  try {
-    const reportsDir = "/home/ubuntu/quant-bot/reports";
-    const files = await readdir(reportsDir);
-
-    const mdFiles = files
-      .filter((f) => f.endsWith(".md"))
-      .filter((f) => f !== "latest.md")
-      .sort();
-
-    const allTrades: Trade[] = [];
-
-    for (const file of mdFiles) {
-      const reportDate = path.basename(file, ".md");
-      if (reportDate !== day) continue;
-
-      const fullPath = path.join(reportsDir, file);
-      const md = await readFile(fullPath, "utf8");
-      allTrades.push(...parseTradesFromMarkdown(md, reportDate));
-    }
-
-    return allTrades;
-  } catch {
-    return [];
-  }
-}
-
-function TradesTable({
-  trades,
-  emptyText,
-}: {
-  trades: Trade[];
-  emptyText: string;
-}) {
-  if (trades.length === 0) {
-    return <div className="text-sm text-zinc-500">{emptyText}</div>;
-  }
-
-  return (
-    <div className="overflow-x-auto">
-      <table className="w-full text-sm">
-        <thead className="text-left text-xs text-zinc-500">
-          <tr>
-            <th className="pb-2 pr-4">Acción</th>
-            <th className="pb-2 pr-4">Ticker</th>
-            <th className="pb-2 pr-4">Shares</th>
-            <th className="pb-2 pr-4">Close</th>
-            <th className="pb-2 pr-4">Precio efectivo</th>
-            <th className="pb-2">Motivo</th>
-          </tr>
-        </thead>
-        <tbody>
-          {trades.map((t, i) => (
-            <tr key={`${t.reportDate}-${t.symbol}-${i}`} className="border-t border-zinc-100">
-              <td className="py-2 pr-4">
-                <SidePill side={t.side} />
-              </td>
-              <td className="py-2 pr-4 font-medium">{t.symbol}</td>
-              <td className="py-2 pr-4">{fmtNum(t.shares, 4)}</td>
-              <td className="py-2 pr-4">{fmtNum(t.close, 2)}</td>
-              <td className="py-2 pr-4">{fmtNum(t.effective, 2)}</td>
-              <td className="py-2">{t.reason}</td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-    </div>
-  );
 }
 
 export default async function Page() {
@@ -246,9 +190,26 @@ export default async function Page() {
   const last = sorted.length ? sorted[sorted.length - 1] : null;
   const equity = last?.equityPost ?? last?.equityPre ?? null;
 
-  const latestTrades = await getLatestTrades();
-  const currentDay = yyyyMmDdFromIso(last?.ts);
-  const dayTrades = await getTradesFromReportsForDay(currentDay);
+  const trades = await getLatestTrades();
+
+  const initialCapital = 100000;
+
+  const pnlAbs =
+    equity !== null && equity !== undefined ? equity - initialCapital : null;
+
+  const pnlPct =
+    equity !== null && equity !== undefined && initialCapital > 0
+      ? ((equity / initialCapital) - 1) * 100
+      : null;
+
+  const pnlTone: "positive" | "negative" | "neutral" =
+    pnlAbs === null || pnlAbs === undefined
+      ? "neutral"
+      : pnlAbs > 0
+      ? "positive"
+      : pnlAbs < 0
+      ? "negative"
+      : "neutral";
 
   return (
     <main className="min-h-screen bg-zinc-50">
@@ -270,11 +231,13 @@ export default async function Page() {
           </div>
         </div>
 
-        <div className="mt-6 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
+        <div className="mt-6 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-6">
           <Card label="Equity" value={fmtMoney(equity)} />
           <Card label="Cash" value={fmtMoney(last?.cash)} />
           <Card label="Exposure" value={fmtPct(last?.exposurePct)} />
           <Card label="Drawdown" value={fmtPct(last?.drawdownPct)} />
+          <PnlCard label="PnL total" value={fmtMoney(pnlAbs)} tone={pnlTone} />
+          <PnlCard label="PnL total %" value={fmtPct(pnlPct)} tone={pnlTone} />
         </div>
 
         <div className="mt-6">
@@ -286,21 +249,40 @@ export default async function Page() {
             Operaciones del último reporte
           </div>
 
-          <TradesTable
-            trades={latestTrades}
-            emptyText="Sin operaciones en este slot."
-          />
-        </div>
-
-        <div className="mt-6 rounded-2xl bg-white p-4 shadow-sm ring-1 ring-zinc-200">
-          <div className="mb-4 text-sm font-medium text-zinc-900">
-            Operaciones del día
-          </div>
-
-          <TradesTable
-            trades={dayTrades}
-            emptyText="Sin operaciones registradas en este día."
-          />
+          {trades.length === 0 ? (
+            <div className="text-sm text-zinc-500">
+              Sin operaciones en este slot.
+            </div>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead className="text-left text-xs text-zinc-500">
+                  <tr>
+                    <th className="pb-2 pr-4">Acción</th>
+                    <th className="pb-2 pr-4">Ticker</th>
+                    <th className="pb-2 pr-4">Shares</th>
+                    <th className="pb-2 pr-4">Close</th>
+                    <th className="pb-2 pr-4">Precio efectivo</th>
+                    <th className="pb-2">Motivo</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {trades.map((t, i) => (
+                    <tr key={`${t.symbol}-${i}`} className="border-t border-zinc-100">
+                      <td className="py-2 pr-4">
+                        <SidePill side={t.side} />
+                      </td>
+                      <td className="py-2 pr-4 font-medium">{t.symbol}</td>
+                      <td className="py-2 pr-4">{fmtNum(t.shares, 4)}</td>
+                      <td className="py-2 pr-4">{fmtNum(t.close, 2)}</td>
+                      <td className="py-2 pr-4">{fmtNum(t.effective, 2)}</td>
+                      <td className="py-2">{t.reason}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
         </div>
 
         <div className="mt-6 rounded-2xl bg-white p-4 shadow-sm ring-1 ring-zinc-200">
