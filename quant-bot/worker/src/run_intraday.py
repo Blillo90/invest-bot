@@ -213,11 +213,6 @@ if __name__ == "__main__":
 
     # 5) Reporte “latest.md”, pero añade el modo al título (para que sepas cuándo corrió)
     # Reutilizamos writer, pero podrías hacer uno propio. Aquí lo simple:
-    print("TIPO DE inserted:", type(inserted))
-    print("NUM TRADES INSERTED:", len(inserted) if inserted is not None else "None")
-
-    if inserted:
-        print("TIPO DE inserted:", type(inserted))
-        print("VALOR DE inserted:", inserted)
+    
     report_path = core.write_report(cfg, con, asof, inserted, start, end, sim)
     print(f"OK ({mode}). Reporte generado: {report_path}")

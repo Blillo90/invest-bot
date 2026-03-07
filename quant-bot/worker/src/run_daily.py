@@ -500,7 +500,16 @@ def write_report(cfg: Config, con, asof: dt.date, fetch_inserted: int, fetch_sta
         trade_lines.append("- (sin trades hoy)")
     else:
         for t in sim["trades"]:
-            trade_lines.append(f"- **{t['side']} {t['symbol']}** | shares {t['shares']:.4f} | close {t['price_close']:.2f} | eff {t['price_effective']:.2f} | {t['reason']}")
+            side = t.get("side", "N/A")
+            symbol = t.get("symbol", "N/A")
+            shares = float(t.get("shares", 0.0))
+            price_close = float(t.get("price_close", t.get("close", t.get("px_now", t.get("price", t.get("price_effective", 0.0))))))
+            price_effective = float(t.get("price_effective", t.get("effective_price", t.get("px_now", t.get("price", price_close)))))
+            reason = t.get("reason", "N/A")
+
+            trade_lines.append(
+                f"- **{side} {symbol}** | shares {shares:.4f} | close {price_close:.2f} | eff {price_effective:.2f} | {reason}"
+        )
 
     warnings = []
     if not sim["can_open_new"]:
