@@ -1,5 +1,7 @@
 // app/page.tsx
 
+//Invest Dashboard TEST MALAGUITA
+
 import EquityChart from "./components/EquityChart";
 import { readFile } from "fs/promises";
 
