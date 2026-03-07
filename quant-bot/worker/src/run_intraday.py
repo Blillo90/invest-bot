@@ -6,6 +6,7 @@ import datetime as dt
 import pandas as pd
 import yfinance as yf
 import duckdb
+import shutil
 
 # Reutiliza todo lo de run_daily.py importándolo como módulo
 # Truco: asegúrate de estar en el mismo directorio y que run_daily.py existe.
@@ -215,4 +216,10 @@ if __name__ == "__main__":
     # Reutilizamos writer, pero podrías hacer uno propio. Aquí lo simple:
     
     report_path = core.write_report(cfg, con, asof, inserted, start, end, sim)
+
+    src = report_path
+    dst = "/home/ubuntu/n8n-files/latest.md"
+
+    shutil.copy(src, dst)
+    
     print(f"OK ({mode}). Reporte generado: {report_path}")
