@@ -22,8 +22,7 @@ def run_bot():
     # Copiar reporte a carpeta permitida por n8n
     try:
         src = "/home/ubuntu/quant-bot/reports/latest.md"
-        dst = "/home/ubuntu/n8n-files/reports/latest.md"
-        os.makedirs(os.path.dirname(dst), exist_ok=True)
+        dst = "/home/ubuntu/n8n-files/latest.md"
         shutil.copy(src, dst)
     except Exception:
         pass
