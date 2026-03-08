@@ -218,8 +218,8 @@ if __name__ == "__main__":
     report_path = core.write_report(cfg, con, asof, inserted, start, end, sim)
 
     src = report_path
-    dst = "/home/ubuntu/n8n-files/latest.md"
-
+    dst = "/home/ubuntu/n8n-files/reports/latest.md"
+    os.makedirs(os.path.dirname(dst), exist_ok=True)
     shutil.copy(src, dst)
     
     print(f"OK ({mode}). Reporte generado: {report_path}")

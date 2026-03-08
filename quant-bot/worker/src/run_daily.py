@@ -517,10 +517,12 @@ def write_report(cfg: Config, con, asof: dt.date, fetch_inserted: int, fetch_sta
     if fetch_inserted == 0:
         warnings.append("- ⚠️ No se insertaron barras nuevas (finde/holiday o sin datos).")
 
+    date_range = f"desde {fetch_start} hasta {fetch_end}" if fetch_start <= fetch_end else "sin nuevas barras"
+
     txt = f"""# Reporte diario — {asof.isoformat()}
 
 ## Resumen
-- Barras nuevas insertadas: **{fetch_inserted}** (desde {fetch_start} hasta {fetch_end})
+- Barras nuevas insertadas: **{fetch_inserted}** ({date_range})
 - Equity (pre): **{sim['equity_pre']:.2f}**
 - Equity (post): **{sim['equity_end']:.2f}**
 - Cash: **{sim['cash_end']:.2f}**
