@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { promises as fs } from "fs";
 
-const HISTORY_PATH = "/home/ubuntu/n8n-files/history.json";
+const HISTORY_PATH = "/home/ubuntu/n8n-history/history.json";
 
 export async function GET() {
   try {
