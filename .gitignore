@@ -1,1 +1,4 @@
-*.pemquant-bot/worker/.venv/
+*.pem
+quant-bot/worker/.venv/
+__pycache__/
+*.pyc
