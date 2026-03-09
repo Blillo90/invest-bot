@@ -1,7 +1,7 @@
 """
-Multi-Factor Backtest — Universo ampliado (S&P500) + 4 factores académicos
+Multi-Factor Backtest — S&P100 + 4 factores académicos
 
-UNIVERSO : S&P500 (~500 acciones) vs. S&P100 anterior
+UNIVERSO : S&P100 (102 acciones más líquidas del mercado)
 REBALANCEO: Mensual (menos costes de transacción)
 RÉGIMEN   : SPY > SMA200 → invertido | SPY < SMA200 → 100% cash
 
@@ -24,57 +24,21 @@ BACKTEST_START = dt.date(2015, 1, 1)
 BACKTEST_END   = dt.date(2026, 3, 7)
 CAPITAL        = 100_000
 
-# ── Universo S&P500 (Wikipedia) ───────────────────────────────────────────────
-# S&P500 completo embebido (componentes actuales ~2026, ~503 símbolos)
+# ── Universo S&P100 ───────────────────────────────────────────────────────────
 UNIVERSE = [
-    # Mega-caps / Tech
-    "AAPL","MSFT","NVDA","AMZN","META","GOOGL","GOOG","BRK-B","LLY","AVGO",
-    "TSLA","JPM","UNH","V","XOM","MA","COST","HD","PG","JNJ",
-    "ABBV","BAC","MRK","CRM","ORCL","CVX","WMT","MCD","KO","NFLX",
-    "AMD","PEP","TMO","ADBE","ACN","LIN","NOW","ABT","DHR","PM",
-    "TXN","MS","GE","ISRG","IBM","GS","RTX","AMGN","INTU","SPGI",
-    "BLK","AXP","SYK","LOW","BKNG","C","VRTX","MDT","ADI","DE",
-    "NEE","PLD","AMAT","CI","MMC","CB","SCHW","TJX","GILD","ADP",
-    "LRCX","ELV","PGR","ETN","MU","BSX","BX","CME","EOG","ICE",
-    "SO","NOC","TT","WM","CL","REGN","MO","USB","ZTS","SLB",
-    "HCA","APH","AON","PANW","KLAC","COF","MCO","EMR","CEG","CMG",
-    "GD","MSI","SNPS","PH","CSX","CDNS","CTAS","ITW","NSC","OKE",
-    "FDX","DUK","FCX","PYPL","MNST","HLT","MAR","AIG","RCL","PCAR",
-    "DLR","SHW","WELL","AJG","JCI","FICO","F","GM","PSA","AFL",
-    "KMI","SPG","D","TDG","TROW","CARR","EW","BDX","MPC","NEM",
-    "FTNT","CCI","PEG","ALL","RSG","PSX","FAST","ACGL","TFC","VRSK",
-    "HWM","IR","CPRT","A","DHI","AXON","GWW","KDP","GLW","CTVA",
-    "IDXX","MTD","YUM","EXC","KR","WTW","NDAQ","AEP","RMD","ROST",
-    "FANG","HIG","ODFL","NUE","AME","EBAY","VMC","ED","PPG","DLTR",
-    "EFX","PCG","XEL","MLM","ANSS","PWR","ON","IQV","DXCM","STZ",
-    "AVB","WEC","HPQ","HPE","BK","LEN","VICI","TTWO","KEYS","EIX",
-    "CSGP","LHX","SBUX","TMUS","CHTR","NXPI","MCHP","STT","GIS","BIIB",
-    "DFS","OMC","TEL","K","SYY","WAB","LUV","DAL","UAL","ALB",
-    "CDW","FE","FTV","ENPH","SOLV","CMS","IP","AEE","ETR","MKC",
-    "PKG","LYB","GPN","NWS","NWSA","FOXA","FOX","HAS","VTR","UDR",
-    "CINF","TDY","EXPD","TER","POOL","BALL","CF","LVS","MGM","WYNN",
-    "MTCH","VFC","RL","PVH","TAP","MOS","FMC","CE","HII","L",
-    "LNC","AIZ","GL","NCLH","AAL","CCL","RCL","HOLX","TECH","ALGN",
-    "BIO","CTLT","HSIC","CAH","ABC","MCK","COR","WBA","CVS","CI",
-    "HUM","CNC","MOH","DVA","PODD","ABMD","XRAY","ZBH","BAX","BDX",
-    "STE","MMM","DOV","IEX","CFG","FITB","RF","HBAN","MTB","WFC",
-    "TFC","KEY","ZION","CMA","FRC","SIVB","PBCT","SBNY","WAL","EWBC",
-    "NTRS","TRMK","BOKF","GBCI","PACW","INDB","FHN","SNV","ONB","UMBF",
-    "IVZ","BEN","AMG","SEIC","VRTS","APAM","CNS","WDR","WETF","GROW",
-    "NSP","PEO","PHM","MDC","KBH","MHO","CCS","SKY","UDR","EQR",
-    "CPT","MAA","AIV","NNN","O","SRC","ADC","WPC","STOR","EPRT",
-    "STAG","FR","EGP","TRNO","LTC","CTRE","GMRE","SNH","OHI","SBRA",
-    "MPW","HR","DOC","PEAK","VTR","WELL","CHCT","NTST","IIPR","HASI",
-    "BEP","NEP","AES","AWK","CWT","MSEX","ARTNA","YORW","SJW","CTWS",
-    "NI","LNT","EVRG","OGE","SR","UTL","CPK","OTTR","MGEE","AVA",
-    "IDT","POR","NWPX","AGR","CLCO","IDA","SWX","NWE","SPNV","ATO",
-    "WGL","SWN","RRC","EQT","AR","CTRA","FANG","PXD","MRO","DVN",
-    "OVV","HAL","BKR","SLB","HP","NBR","WHD","RES","WTTR","ACDC",
-    "TDW","TALO","CPE","SM","GPOR","REX","SandRidge","BCEI","ESTE","FLMN",
+    "AAPL","ABBV","ABT","ACN","ADBE","AIG","AMD","AMGN","AMT","AMZN",
+    "AVGO","AXP","BA","BAC","BK","BKNG","BLK","BMY","BRK-B","C",
+    "CAT","CHTR","CL","CMCSA","COF","COP","COST","CRM","CSCO","CVS",
+    "CVX","DE","DHR","DIS","DOW","DUK","EMR","EXC","F","FDX",
+    "GD","GE","GILD","GM","GOOGL","GS","HD","HON","IBM","INTC",
+    "INTU","ISRG","JNJ","JPM","KHC","KO","LIN","LLY","LMT","LOW",
+    "MA","MCD","MDLZ","MDT","MET","META","MMM","MO","MRK","MS",
+    "MSFT","NEE","NFLX","NKE","NOW","NVDA","ORCL","PEP","PFE","PG",
+    "PM","PYPL","QCOM","RTX","SBUX","SCHW","SO","SPG","T","TGT",
+    "TMO","TMUS","TXN","UNH","UNP","UPS","USB","V","VZ","WFC",
+    "WMT","XOM",
 ]
-# Limpiar tickers inválidos/duplicados
-UNIVERSE = list(dict.fromkeys([t for t in UNIVERSE if t and "." not in t and len(t) <= 5]))
-print(f"Universo ampliado: {len(UNIVERSE)} símbolos (S&P500)")
+print(f"Universo: {len(UNIVERSE)} símbolos (S&P100)")
 
 # ── Descarga ──────────────────────────────────────────────────────────────────
 print(f"Descargando {len(UNIVERSE)} acciones + SPY (puede tardar 3-5 min)...")
