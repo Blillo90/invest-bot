@@ -1,4 +1,4 @@
-import yfinance as yf, pandas as pd, numpy as np, math, datetime as dt, duckdb
+import yfinance as yf, pandas as pd, numpy as np, math, datetime as dt
 
 SP100 = [
     "AAPL","ABBV","ABT","ACN","ADBE","AIG","AMD","AMGN","AMT","AMZN",
@@ -14,8 +14,12 @@ SP100 = [
     "WMT","XOM",
 ]
 
-print(f"Descargando {len(SP100)} símbolos del S&P 100...")
-raw = yf.download(SP100, start="2022-12-01", end="2026-03-07",
+DOWNLOAD_START = "2014-01-01"   # warmup para features (ret_20, vol_z_20 necesitan ~80 días)
+BACKTEST_START = dt.date(2015, 1, 1)
+BACKTEST_END   = dt.date(2026, 3, 7)
+
+print(f"Descargando {len(SP100)} símbolos desde {DOWNLOAD_START}...")
+raw = yf.download(SP100, start=DOWNLOAD_START, end=str(BACKTEST_END),
                   auto_adjust=True, progress=False, group_by="ticker")
 print(f"Descarga completa. MultiIndex: {isinstance(raw.columns, pd.MultiIndex)}")
 
@@ -53,7 +57,12 @@ def compute_features(df):
 
 feat = pd.concat([compute_features(g.copy()) for _, g in bars.groupby("symbol")],
                  ignore_index=True)
-print(f"Features calculadas: {len(feat)} filas\n")
+print(f"Features calculadas: {len(feat)} filas")
+
+# Recortar al período real de backtest
+bars_bt = bars[bars["date"] >= BACKTEST_START]
+feat_bt = feat[feat["date"] >= BACKTEST_START]
+print(f"Período backtest: {feat_bt['date'].min()} → {feat_bt['date'].max()}\n")
 
 
 def rp(s):
@@ -103,33 +112,31 @@ def run_bt(bars_df, feat_df, cfg):
     return df
 
 
-# Load 30-symbol data for reference
-src = duckdb.connect("/home/user/invest-bot/quant-bot/data/market.duckdb", read_only=True)
-b30 = src.execute("SELECT symbol,date,close FROM bars").df()
-f30 = src.execute("SELECT symbol,date,ret_5,ret_10,ret_20,vol_20,vol_z_20,dollar_vol_20 FROM features").df()
-src.close()
-b30["date"] = pd.to_datetime(b30["date"]).dt.date
-f30["date"] = pd.to_datetime(f30["date"]).dt.date
-
-START = dt.date(2023, 3, 1)
-bars_sp = bars[bars["date"] >= START]
-feat_sp = feat[feat["date"] >= START]
-bars_30 = b30[b30["date"] >= START]
-feat_30 = f30[f30["date"] >= START]
+# También descargamos SPY como benchmark
+print("Descargando SPY (benchmark S&P500)...")
+spy_raw = yf.download("SPY", start=str(BACKTEST_START), end=str(BACKTEST_END),
+                      auto_adjust=True, progress=False)
+spy = spy_raw["Close"].squeeze()
+spy.index = pd.to_datetime(spy.index)
+spy_monthly = spy.resample("ME").last()
+spy_mret = spy_monthly.pct_change().dropna()
+spy_final = spy_monthly.iloc[-1] / spy_monthly.iloc[0] * 100_000
+spy_ny = (spy_monthly.index[-1] - spy_monthly.index[0]).days / 365.25
+spy_cagr = ((spy_final / 100_000) ** (1 / spy_ny) - 1) * 100
+spy_exc = spy_mret - 0.045 / 12
+spy_sharpe = spy_exc.mean() / spy_exc.std() * math.sqrt(12)
+print(f"SPY benchmark: CAGR {spy_cagr:+.2f}% | Sharpe {spy_sharpe:.2f} | Final ${spy_final:,.0f}\n")
 
 CFGS = {
-    "30sym Agres-B (referencia)":  dict(BT=0.25, ST=0.60, MR=15, MP=30, SIG="ret_10", USE_SP=False),
-    "SP100 rot.total ret_10 30p":  dict(BT=0.25, ST=0.60, MR=20, MP=30, SIG="ret_10", USE_SP=True),
-    "SP100 top-10 concentrado":    dict(BT=0.10, ST=0.30, MR=10, MP=10, SIG="ret_20", USE_SP=True),
-    "SP100 ret_5 momentum 20p":    dict(BT=0.20, ST=0.50, MR=15, MP=20, SIG="ret_5",  USE_SP=True),
-    "SP100 top-5 MAXIMO":          dict(BT=0.05, ST=0.15, MR=5,  MP=5,  SIG="ret_10", USE_SP=True),
+    "SP100 rot.total ret_10": dict(BT=0.25, ST=0.60, MR=20, MP=30, SIG="ret_10"),
+    "SP100 top-10 ret_20":    dict(BT=0.10, ST=0.30, MR=10, MP=10, SIG="ret_20"),
+    "SP100 ret_5 momentum":   dict(BT=0.20, ST=0.50, MR=15, MP=20, SIG="ret_5"),
+    "SP100 top-5 MAXIMO":     dict(BT=0.05, ST=0.15, MR=5,  MP=5,  SIG="ret_10"),
 }
 
 results = {}
 for name, cfg in CFGS.items():
-    bd = bars_sp if cfg["USE_SP"] else bars_30
-    fd = feat_sp if cfg["USE_SP"] else feat_30
-    df = run_bt(bd, fd, cfg)
+    df = run_bt(bars_bt, feat_bt, cfg)
     monthly = df["equity"].resample("ME").last()
     mret = monthly.pct_change().dropna()
     ny = (df.index[-1] - df.index[0]).days / 365.25
@@ -143,11 +150,19 @@ for name, cfg in CFGS.items():
         best=mret.max() * 100, worst=mret.min() * 100, monthly=monthly,
     )
 
-print("=" * 110)
-print("  COMPARATIVA: 30 sym vs S&P100 — varios escenarios | 2023–2026 | $100,000")
-print("=" * 110)
+# Añadir SPY como fila de referencia
+results["SPY (benchmark)"] = dict(
+    final=spy_final, cagr=spy_cagr, max_dd=float("nan"),
+    sharpe=spy_sharpe, wins=(spy_mret > 0).sum(), n=len(spy_mret),
+    best=spy_mret.max() * 100, worst=spy_mret.min() * 100, monthly=spy_monthly / spy_monthly.iloc[0] * 100_000,
+)
+
+n_years = round((BACKTEST_END - BACKTEST_START).days / 365.25, 1)
+print("=" * 115)
+print(f"  S&P100 BACKTEST {BACKTEST_START.year}–{BACKTEST_END.year} ({n_years} años) | $100,000 inicial")
+print("=" * 115)
 names = list(results.keys())
-W = 24
+W = 26
 
 print(f"\n{'Métrica':<20}", end="")
 for n in names:
@@ -156,13 +171,13 @@ print()
 print("-" * (20 + (W + 2) * len(names)))
 
 for lbl, key, fmt in [
-    ("Capital final",   "final",   "${:>11,.0f}"),
-    ("CAGR",            "cagr",    "{:>+9.2f}%"),
-    ("Max Drawdown",    "max_dd",  "{:>+9.2f}%"),
-    ("Sharpe",          "sharpe",  "{:>9.2f}"),
+    ("Capital final",   "final",   "${:>13,.0f}"),
+    ("CAGR",            "cagr",    "{:>+10.2f}%"),
+    ("Max Drawdown",    "max_dd",  "{:>+10.2f}%"),
+    ("Sharpe",          "sharpe",  "{:>10.2f}"),
     ("Meses positivos", "wins",    None),
-    ("Mejor mes",       "best",    "{:>+9.2f}%"),
-    ("Peor mes",        "worst",   "{:>+9.2f}%"),
+    ("Mejor mes",       "best",    "{:>+10.2f}%"),
+    ("Peor mes",        "worst",   "{:>+10.2f}%"),
 ]:
     print(f"{lbl:<20}", end="")
     for n in names:
@@ -170,8 +185,30 @@ for lbl, key, fmt in [
         if key == "wins":
             s = f"{v}/{results[n]['n']}"
             print(f"  {s:<{W}}", end="")
+        elif math.isnan(v):
+            print(f"  {'N/A':<{W}}", end="")
         else:
             print(f"  {fmt.format(v):<{W}}", end="")
+    print()
+
+# Detalle anual (más limpio que mensual para 11 años)
+print("\n--- Retorno por año ---")
+print(f"{'Año':<6}", end="")
+for n in names:
+    print(f"  {n[:W-2]:<{W}}", end="")
+print()
+print("-" * (6 + (W + 2) * len(names)))
+
+for yr in range(BACKTEST_START.year, BACKTEST_END.year + 1):
+    print(f"{yr:<6}", end="")
+    for n in names:
+        m = results[n]["monthly"]
+        yr_m = m[m.index.year == yr]
+        if len(yr_m) < 2:
+            print(f"  {'N/A':<{W}}", end="")
+            continue
+        ret = (yr_m.iloc[-1] / yr_m.iloc[0] - 1) * 100
+        print(f"  {'+' if ret>=0 else ''}{ret:.2f}%{'':<{W-9}}", end="")
     print()
 
 print("\n--- Detalle mensual ---")
@@ -188,10 +225,10 @@ for m in sorted(set(m for n in names for m in results[n]["monthly"].index)):
         eq = results[n]["monthly"].get(m)
         if eq is not None:
             ret = (eq / prev[n] - 1) * 100
-            s = f"{'+' if ret >= 0 else ''}{ret:.2f}% (${eq:>8,.0f})"
+            s = f"{'+' if ret >= 0 else ''}{ret:.2f}% (${eq:>9,.0f})"
             print(f"  {s:<{W}}", end="")
             prev[n] = eq
         else:
             print(f"  {'N/A':<{W}}", end="")
     print()
-print("=" * 110)
+print("=" * 115)
