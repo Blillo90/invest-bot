@@ -32,11 +32,11 @@ function Write-Warn { param($msg) Write-Host "  WARN: $msg"  -ForegroundColor Ye
 function Write-Fail { param($msg) Write-Host "  ERROR: $msg" -ForegroundColor Red    }
 
 # Variables de script accesibles desde cualquier scope (incluyendo scriptblocks)
-$script:StepResults = [System.Collections.Generic.List[object]]::new()
+$script:StepResults = New-Object System.Collections.Generic.List[object]
 $script:Target      = ""   # Equipo remoto activo
 
 function Reset-StepResults {
-    $script:StepResults = [System.Collections.Generic.List[object]]::new()
+    $script:StepResults = New-Object System.Collections.Generic.List[object]
 }
 
 function Add-StepResult {
