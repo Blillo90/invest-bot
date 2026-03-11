@@ -302,7 +302,7 @@ CertificateTemplate = "AirbusAutoEnrolledClientAuthentication"
                                         }
                                         return @{ Status="WARN"; Details="Emitido pero accept fallo: $($acceptOut -join ' ') | via $url" }
                                     }
-                                    $lastErr = "$url → ExitCode=$LASTEXITCODE: $($submitOut -join ' ')"
+                                    $lastErr = "$url ExitCode=$($LASTEXITCODE): $($submitOut -join ' ')"
                                     Remove-Item $cerPath -Force -ErrorAction SilentlyContinue
                                 }
 
