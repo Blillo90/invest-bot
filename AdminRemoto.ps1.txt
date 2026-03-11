@@ -306,7 +306,7 @@ CertificateTemplate = "AirbusAutoEnrolledClientAuthentication"
                                         continue
                                     }
                                     $submitOut = Receive-Job $job
-                                    $submitExit = $job.ChildJobs[0].Error.Count -gt 0 ? 1 : 0
+                                    if ($job.ChildJobs[0].Error.Count -gt 0) { $submitExit = 1 } else { $submitExit = 0 }
                                     Remove-Job $job -Force
                                     if ($submitExit -eq 0 -and (Test-Path $cerPath)) {
                                         $acceptOut = certreq -accept -machine $cerPath 2>&1
