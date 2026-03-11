@@ -530,6 +530,8 @@ $statusBar.Dock      = "Bottom"
 $statusBar.Height    = 24
 $statusBar.BackColor = $accent
 $form.Controls.Add($statusBar)
+# outputBox debe ser el último en el layout (índice 0 = Fill solo ocupa lo que queda)
+$script:outputBox.BringToFront()
 
 $script:statusLabel            = New-Object System.Windows.Forms.Label
 $script:statusLabel.Text       = "  Listo - introduce un equipo y pulsa una accion"
@@ -652,8 +654,6 @@ $form.Add_Shown({
     Append-Output "  > Los botones de accion se bloquean mientras hay una tarea en curso." $silver
     Write-Sep
     Append-Output "" $white
-    $script:outputBox.SelectionStart = 0
-    $script:outputBox.ScrollToCaret()
 })
 
 [System.Windows.Forms.Application]::Run($form)
