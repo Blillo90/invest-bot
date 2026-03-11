@@ -268,7 +268,7 @@ function Invoke-MasterCheck {
 
     Show-Summary -ExcludeWarnStep "success.txt"
 
-    if (Confirm-Action "¿Instalar tarea programada en '$ComputerName' cada 15 min?") {
+    if (Confirm-Action "Instalar tarea programada en '$ComputerName' cada 15 min?") {
         $ps1Remote = Get-Input "Ruta del .ps1 EN el equipo remoto`n(ej: C:\Scripts\Master-Checker.ps1)" "Tarea programada"
         if (-not [string]::IsNullOrWhiteSpace($ps1Remote)) {
             Invoke-Command -ComputerName $ComputerName -ArgumentList $script:TaskName, $ps1Remote -ScriptBlock {
@@ -313,7 +313,7 @@ function Invoke-SoftwareCheck {
 
     Write-Warn "'$appName' no esta en el Centro de Software de '$ComputerName'."
 
-    if (-not (Confirm-Action "¿Forzar ciclos SCCM en '$ComputerName'?")) { return }
+    if (-not (Confirm-Action "Forzar ciclos SCCM en '$ComputerName'?")) { return }
 
     Reset-StepResults
 
@@ -321,7 +321,7 @@ function Invoke-SoftwareCheck {
         Invoke-Command -ComputerName $script:Target -ScriptBlock $script:SccmCyclesBlock
     }
 
-    if (Confirm-Action "¿Ejecutar gpupdate /force en '$ComputerName'?") {
+    if (Confirm-Action "Ejecutar gpupdate /force en '$ComputerName'?") {
         Invoke-Step -Name "GPUPDATE /force" -ScriptBlock {
             $ec = Invoke-Command -ComputerName $script:Target -ScriptBlock {
                 (Start-Process gpupdate.exe -ArgumentList "/force" -Wait -PassThru).ExitCode
@@ -363,7 +363,7 @@ function Invoke-UsbDriverClean {
                       ([System.Drawing.Color]::LightYellow)
     }
 
-    if (-not (Confirm-Action "¿Eliminar estos $(@($drivers).Count) driver(s) USB en '$ComputerName'?")) {
+    if (-not (Confirm-Action "Eliminar estos $(@($drivers).Count) driver(s) USB en '$ComputerName'?")) {
         Write-Warn "Operacion cancelada."
         return
     }
@@ -375,7 +375,7 @@ function Invoke-UsbDriverClean {
     }
     Write-Ok "Drivers eliminados."
 
-    if (Confirm-Action "¿Reiniciar '$ComputerName' ahora?") {
+    if (Confirm-Action "Reiniciar '$ComputerName' ahora?") {
         Restart-Computer -ComputerName $ComputerName -Force
         Write-Ok "Reiniciando '$ComputerName'..."
     }
