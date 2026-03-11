@@ -145,7 +145,7 @@ function Show-Summary {
     }
     Append-Output "" ([System.Drawing.Color]::White)
     if (-not $blocked) { Write-Ok  "TODO OK" }
-    else                { Write-Warn "Hay pasos con WARN/ERROR que requieren atención." }
+    else                { Write-Warn "Hay pasos con WARN/ERROR que requieren atencion." }
 }
 
 # Bloque SCCM compartido (se ejecuta en el equipo remoto)
@@ -187,7 +187,7 @@ function Invoke-MasterCheck {
     $script:Target = $ComputerName
     Reset-StepResults
 
-    Write-Info "Masterización de '$ComputerName'"
+    Write-Info "Masterizacion de '$ComputerName'"
     Write-Sep
 
     Invoke-Step -Name "GPUPDATE /force" -ScriptBlock {
@@ -292,7 +292,7 @@ function Invoke-SoftwareCheck {
     param([Parameter(Mandatory)][string]$ComputerName)
     $script:Target = $ComputerName
 
-    $appName = Get-Input "Nombre o ID de la aplicación a buscar" "Buscar en Centro de Software"
+    $appName = Get-Input "Nombre o ID de la aplicacion a buscar" "Buscar en Centro de Software"
     if ([string]::IsNullOrWhiteSpace($appName)) { return }
 
     Write-Info "Buscando '$appName' en '$ComputerName'..."
@@ -303,15 +303,15 @@ function Invoke-SoftwareCheck {
             Where-Object { $_.Name -like "*$appName*" }
 
     if ($apps) {
-        Write-Ok "Aplicación(es) encontrada(s):"
+        Write-Ok "Aplicacion(es) encontrada(s):"
         foreach ($a in $apps) {
-            Append-Output ("    · {0}  |  Estado: {1}  |  Versión: {2}" -f $a.Name, $a.InstallState, $a.SoftwareVersion) `
+            Append-Output ("    > {0}  |  Estado: {1}  |  Version: {2}" -f $a.Name, $a.InstallState, $a.SoftwareVersion) `
                           ([System.Drawing.Color]::LightGreen)
         }
         return
     }
 
-    Write-Warn "'$appName' no está en el Centro de Software de '$ComputerName'."
+    Write-Warn "'$appName' no esta en el Centro de Software de '$ComputerName'."
 
     if (-not (Confirm-Action "¿Forzar ciclos SCCM en '$ComputerName'?")) { return }
 
@@ -364,7 +364,7 @@ function Invoke-UsbDriverClean {
     }
 
     if (-not (Confirm-Action "¿Eliminar estos $(@($drivers).Count) driver(s) USB en '$ComputerName'?")) {
-        Write-Warn "Operación cancelada."
+        Write-Warn "Operacion cancelada."
         return
     }
 
@@ -551,7 +551,7 @@ function Get-ValidComputer {
     }
     Set-Status "Comprobando conectividad con '$computer'..." ([System.Drawing.Color]::Yellow)
     if (-not (Test-Connection -ComputerName $computer -Count 1 -Quiet)) {
-        Write-Fail "El equipo '$computer' no está accesible."
+        Write-Fail "El equipo '$computer' no esta accesible."
         Set-Status "Equipo no accesible" ([System.Drawing.Color]::Tomato)
         return $null
     }
@@ -565,7 +565,7 @@ $btnPing.Add_Click({
     if ([string]::IsNullOrEmpty($computer)) { return }
     Set-Status "Haciendo ping a '$computer'..." ([System.Drawing.Color]::Yellow)
     if (Test-Connection -ComputerName $computer -Count 1 -Quiet) {
-        Set-Status "  '$computer' está ONLINE" ([System.Drawing.Color]::LightGreen)
+        Set-Status "  '$computer' esta ONLINE" ([System.Drawing.Color]::LightGreen)
         Write-Ok "Ping OK → '$computer' accesible."
     } else {
         Set-Status "  '$computer' NO accesible" ([System.Drawing.Color]::Tomato)
@@ -577,7 +577,7 @@ $btnMaster.Add_Click({
     $target = Get-ValidComputer
     if (-not $target) { return }
     Set-ButtonsEnabled $false
-    Set-Status "Comprobando masterización de '$target'..." ([System.Drawing.Color]::Yellow)
+    Set-Status "Comprobando masterizacion de '$target'..." ([System.Drawing.Color]::Yellow)
     try   { Invoke-MasterCheck   -ComputerName $target }
     catch { Write-Fail "Error inesperado: $_" }
     Set-ButtonsEnabled $true
