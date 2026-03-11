@@ -50,7 +50,7 @@ function Write-Info { param($msg) Append-Output $msg            ([System.Drawing
 function Write-Ok   { param($msg) Append-Output "  OK: $msg"   ([System.Drawing.Color]::LightGreen)                  }
 function Write-Warn { param($msg) Append-Output "  WARN: $msg" ([System.Drawing.Color]::Yellow)                      }
 function Write-Fail { param($msg) Append-Output "  ERROR: $msg"([System.Drawing.Color]::Tomato)                      }
-function Write-Sep  {             Append-Output ("─" * 65)     ([System.Drawing.Color]::FromArgb(80, 80, 80))         }
+function Write-Sep  {             Append-Output ("-" * 65)      ([System.Drawing.Color]::FromArgb(80, 80, 80))         }
 
 function Set-Status {
     param([string]$msg, [System.Drawing.Color]$color = [System.Drawing.Color]::White)
@@ -448,7 +448,7 @@ $form.Controls.Add($topPanel)
 
 # Título
 $lblTitle           = New-Object System.Windows.Forms.Label
-$lblTitle.Text      = "  ADMINISTRACIÓN REMOTA"
+$lblTitle.Text      = "  ADMINISTRACION REMOTA"
 $lblTitle.Font      = $fontTitle
 $lblTitle.ForeColor = [System.Drawing.Color]::FromArgb(0, 190, 255)
 $lblTitle.AutoSize  = $true
@@ -511,7 +511,7 @@ $statusBar.BackColor = $accent
 $form.Controls.Add($statusBar)
 
 $script:statusLabel            = New-Object System.Windows.Forms.Label
-$script:statusLabel.Text       = "  Listo — introduce un equipo y pulsa una acción"
+$script:statusLabel.Text       = "  Listo - introduce un equipo y pulsa una accion"
 $script:statusLabel.Dock       = "Fill"
 $script:statusLabel.ForeColor  = $white
 $script:statusLabel.Font       = $fontSmall
@@ -618,7 +618,7 @@ $txtEquipo.Add_KeyDown({
 
 # ── Mensaje de bienvenida ─────────────────────────────────────────
 Append-Output "  Herramienta de Administración Remota v3.0" ([System.Drawing.Color]::FromArgb(0,190,255))
-Append-Output "  Accenture / Airbus — PowerShell 5.1"       $silver
+Append-Output "  Accenture / Airbus  |  PowerShell 5.1"      $silver
 Write-Sep
 Append-Output "  · Introduce el nombre del equipo en el campo superior." $silver
 Append-Output "  · Usa 'Ping' para verificar conectividad antes de operar." $silver
