@@ -206,25 +206,24 @@ function Invoke-MasterCheck {
     }
 
     if ($script:Modo -eq "Divisional") {
-        # ── Divisional: deben existir exactamente 2 certs "da Vinci G1" vigentes ──
-        Invoke-Step -Name "Certificados Divisional (da Vinci G1)" -ScriptBlock {
+        # ── Divisional: 1 cert Breguet G1 + 1 cert da Vinci G1, ambos vigentes ──
+        Invoke-Step -Name "Certificados Divisional (Breguet G1 + da Vinci G1)" -ScriptBlock {
             $result = Invoke-Command -ComputerName $script:Target -ScriptBlock {
-                $issuerFilter = "*Airbus Issuing CA da Vinci G1*"
-                $all   = Get-ChildItem "Cert:\LocalMachine\My" -ErrorAction SilentlyContinue
-                $certs = $all | Where-Object { $_.Issuer -like $issuerFilter }
-                $now   = Get-Date
+                $all  = Get-ChildItem "Cert:\LocalMachine\My" -ErrorAction SilentlyContinue
+                $now  = Get-Date
                 $details = @(); $missing = @()
 
-                # Comprobar cert 1 (aefews01 — da Vinci G1)
-                $c1 = $certs | Where-Object { $_.NotAfter -gt $now } | Sort-Object NotAfter -Descending | Select-Object -First 1
-                if (-not $c1) { $missing += "da Vinci G1 (primer cert)" }
-                else { $details += "Cert1: Issuer=$($c1.Issuer) | Expira=$($c1.NotAfter.ToString('dd/MM/yyyy'))" }
+                # Cert Breguet G1
+                $cBreguet = $all | Where-Object { $_.Issuer -like "*Breguet G1*" -and $_.NotAfter -gt $now } |
+                                   Sort-Object NotAfter -Descending | Select-Object -First 1
+                if (-not $cBreguet) { $missing += "Breguet G1" }
+                else { $details += "Breguet G1: Expira=$($cBreguet.NotAfter.ToString('dd/MM/yyyy'))" }
 
-                # Comprobar cert 2 (segundo cert independiente)
-                $c2 = $certs | Where-Object { $_.NotAfter -gt $now -and $_.Thumbprint -ne $c1.Thumbprint } |
-                               Sort-Object NotAfter -Descending | Select-Object -First 1
-                if (-not $c2) { $missing += "da Vinci G1 (segundo cert)" }
-                else { $details += "Cert2: Issuer=$($c2.Issuer) | Expira=$($c2.NotAfter.ToString('dd/MM/yyyy'))" }
+                # Cert da Vinci G1
+                $cVinci = $all | Where-Object { $_.Issuer -like "*da Vinci G1*" -and $_.NotAfter -gt $now } |
+                                 Sort-Object NotAfter -Descending | Select-Object -First 1
+                if (-not $cVinci) { $missing += "da Vinci G1" }
+                else { $details += "da Vinci G1: Expira=$($cVinci.NotAfter.ToString('dd/MM/yyyy'))" }
 
                 if ($missing.Count -gt 0) {
                     return @{ Status="ERROR"; Details="FALTA: $($missing -join ', ')  |  $($details -join ' | ')"; Missing=$missing }
