@@ -255,8 +255,9 @@ function Invoke-MasterCheck {
                         Invoke-Step -Name "Inscribir $ct via CES" -ScriptBlock {
                             Invoke-Command -ComputerName $target -ArgumentList $urls -ScriptBlock {
                                 param($cesUrls)
-                                # Get-Certificate apunta directamente al CES, sin CEP policy discovery
-                                $template = "AirbusAutoEnrolledClientAuthentication"
+                                # Obtener nombre OID interno de la plantilla (puede diferir del display name)
+                                $template  = "AirbusAutoEnrolledClientAuthentication"
+                                $errors    = @()
                                 foreach ($url in $cesUrls) {
                                     try {
                                         $r = Get-Certificate -Template $template -Url $url `
@@ -264,12 +265,12 @@ function Invoke-MasterCheck {
                                         if ($r.Status -eq "Issued") {
                                             return @{ Status="OK"; Details="Emitido OK | Thumbprint=$($r.Certificate.Thumbprint) | via $url" }
                                         }
-                                        return @{ Status="WARN"; Details="Estado=$($r.Status) | via $url" }
+                                        $errors += "[$url] Estado=$($r.Status)"
                                     } catch {
-                                        # Probar siguiente servidor CES
+                                        $errors += "[$url] EX: $($_.Exception.Message)"
                                     }
                                 }
-                                return @{ Status="ERROR"; Details="Sin respuesta de ningun servidor CES. Verifica conectividad con aefews01/02." }
+                                return @{ Status="ERROR"; Details="Sin exito en CES. Errores: $($errors -join ' || ')" }
                             }
                         }
                     }
