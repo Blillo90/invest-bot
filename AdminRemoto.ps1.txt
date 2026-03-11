@@ -252,66 +252,62 @@ function Invoke-MasterCheck {
                         $urls   = $cesMap[$certType]
                         $target = $script:Target
                         $ct     = $certType
-                        Invoke-Step -Name "Inscribir $ct via CES (SYSTEM)" -ScriptBlock {
+                        Invoke-Step -Name "Inscribir $ct via certreq+CES" -ScriptBlock {
                             Invoke-Command -ComputerName $target -ArgumentList $urls,$ct -ScriptBlock {
                                 param($cesUrls, $certType)
-                                # Get-Certificate falla desde PSRemoting porque intenta LoadPolicy (CEP)
-                                # incluso al darle una URL CES directa. Solucion: ejecutar como SYSTEM
-                                # via tarea programada temporal — SYSTEM tiene ticket Kerberos de maquina
-                                # y accede al CES sin restricciones de doble salto.
-                                $taskName  = "AirbusEnroll_$(Get-Random -Maximum 9999)"
-                                $resultPath = "$env:TEMP\$taskName.txt"
-                                $template  = "AirbusAutoEnrolledClientAuthentication"
+                                # certreq es la unica forma de evitar LoadPolicy (CEP):
+                                #   1. certreq -new  → genera CSR localmente (sin red)
+                                #   2. certreq -submit -config <CES_URL> → envia directamente al CES
+                                #   3. certreq -accept → instala el cert en LocalMachine\My
+                                # Ningun paso contacta el servidor de directiva (CEP).
+                                $rand    = Get-Random -Maximum 99999
+                                $base    = "$env:TEMP\AirbusEnroll_$rand"
+                                $infPath = "$base.inf"
+                                $reqPath = "$base.req"
+                                $cerPath = "$base.cer"
 
-                                # Script que corre como SYSTEM: prueba cada URL CES y escribe resultado
-                                $urlsJoined = $cesUrls -join "','"
-                                $psCode = @"
-`$template = '$template'
-`$resultFile = '$resultPath'
-`$cesUrls = @('$urlsJoined')
-foreach (`$url in `$cesUrls) {
-    try {
-        `$r = Get-Certificate -Template `$template -Url `$url -CertStoreLocation 'Cert:\LocalMachine\My' -ErrorAction Stop
-        if (`$r.Status -eq 'Issued') {
-            "OK|Thumbprint=`$(`$r.Certificate.Thumbprint)|`$url" | Out-File `$resultFile -Encoding UTF8
-            exit 0
-        }
-        "WARN|Estado=`$(`$r.Status)|`$url" | Out-File `$resultFile -Encoding UTF8
-    } catch {
-        "ERROR|`$(`$_.Exception.Message)|`$url" | Out-File `$resultFile -Encoding UTF8
-    }
-}
-if (-not (Test-Path `$resultFile)) { "ERROR|SinResultado|ninguna" | Out-File `$resultFile -Encoding UTF8 }
-"@
-                                $encoded = [Convert]::ToBase64String(
-                                    [System.Text.Encoding]::Unicode.GetBytes($psCode))
+                                # INF minimo — sujeto lo rellena la CA desde AD (template Build-from-AD)
+                                @"
+[Version]
+Signature="`$Windows NT`$"
 
-                                try {
-                                    $action    = New-ScheduledTaskAction -Execute "powershell.exe" `
-                                                    -Argument "-NonInteractive -WindowStyle Hidden -EncodedCommand $encoded"
-                                    $principal = New-ScheduledTaskPrincipal -UserId "SYSTEM" -RunLevel Highest
-                                    Register-ScheduledTask -TaskName $taskName -Action $action `
-                                        -Principal $principal -Force | Out-Null
-                                    Start-ScheduledTask -TaskName $taskName
+[NewRequest]
+Subject = "CN=$env:COMPUTERNAME"
+MachineKeySet = TRUE
+KeySpec       = AT_KEYEXCHANGE
+KeyLength     = 2048
+Exportable    = FALSE
+RequestType   = PKCS10
 
-                                    # Esperar resultado (max 45 s)
-                                    $timeout = 45
-                                    while ($timeout -gt 0 -and -not (Test-Path $resultPath)) {
-                                        Start-Sleep -Seconds 1; $timeout--
-                                    }
-                                    Unregister-ScheduledTask -TaskName $taskName -Confirm:$false -ErrorAction SilentlyContinue
+[RequestAttributes]
+CertificateTemplate = "AirbusAutoEnrolledClientAuthentication"
+"@ | Out-File $infPath -Encoding ASCII
 
-                                    if (Test-Path $resultPath) {
-                                        $line   = (Get-Content $resultPath -Raw -Encoding UTF8).Trim()
-                                        Remove-Item $resultPath -Force -ErrorAction SilentlyContinue
-                                        $parts  = $line -split '\|', 3
-                                        return @{ Status=$parts[0]; Details="$($parts[1]) | via $($parts[2])" }
-                                    }
-                                    return @{ Status="ERROR"; Details="Timeout 45s esperando resultado de inscripcion" }
-                                } catch {
-                                    Unregister-ScheduledTask -TaskName $taskName -Confirm:$false -ErrorAction SilentlyContinue
-                                    return @{ Status="ERROR"; Details="Error creando tarea: $($_.Exception.Message)" }
+                                # Generar CSR
+                                $newOut = certreq -new -MachineStore -q $infPath $reqPath 2>&1
+                                if ($LASTEXITCODE -ne 0) {
+                                    Remove-Item $infPath -Force -ErrorAction SilentlyContinue
+                                    return @{ Status="ERROR"; Details="certreq -new fallo (ExitCode=$LASTEXITCODE): $($newOut -join ' ')" }
                                 }
+
+                                # Intentar cada servidor CES directamente
+                                $lastErr = ""
+                                foreach ($url in $cesUrls) {
+                                    $submitOut = certreq -submit -config $url -q -MachineStore $reqPath $cerPath 2>&1
+                                    if ($LASTEXITCODE -eq 0 -and (Test-Path $cerPath)) {
+                                        $acceptOut = certreq -accept -machine $cerPath 2>&1
+                                        Remove-Item $infPath,$reqPath,$cerPath -Force -ErrorAction SilentlyContinue
+                                        if ($LASTEXITCODE -eq 0) {
+                                            return @{ Status="OK"; Details="Certificado inscrito OK via $url" }
+                                        }
+                                        return @{ Status="WARN"; Details="Emitido pero accept fallo: $($acceptOut -join ' ') | via $url" }
+                                    }
+                                    $lastErr = "$url → ExitCode=$LASTEXITCODE: $($submitOut -join ' ')"
+                                    Remove-Item $cerPath -Force -ErrorAction SilentlyContinue
+                                }
+
+                                Remove-Item $infPath,$reqPath -Force -ErrorAction SilentlyContinue
+                                return @{ Status="ERROR"; Details="certreq -submit fallo en todos los CES. Ultimo: $lastErr" }
                             }
                         }
                     }
