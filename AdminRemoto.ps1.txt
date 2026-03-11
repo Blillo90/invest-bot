@@ -197,7 +197,7 @@ function Invoke-MasterCheck {
     Write-Sep
 
     Invoke-Step -Name "GPUPDATE /force" -ScriptBlock {
-        $ec = Invoke-Command -ComputerName $script:Target -TimeoutSecs 60 -ScriptBlock {
+        $ec = Invoke-Command -ComputerName $script:Target -ScriptBlock {
             (Start-Process gpupdate.exe -ArgumentList "/force /wait:0" -Wait -PassThru).ExitCode
         }
         if ($ec -eq 0) { return @{ Status="OK";   Details="ExitCode=0" } }
@@ -329,7 +329,7 @@ function Invoke-SoftwareCheck {
 
     if (Confirm-Action "Ejecutar gpupdate /force en '$ComputerName'?") {
         Invoke-Step -Name "GPUPDATE /force" -ScriptBlock {
-            $ec = Invoke-Command -ComputerName $script:Target -TimeoutSecs 60 -ScriptBlock {
+            $ec = Invoke-Command -ComputerName $script:Target -ScriptBlock {
                 (Start-Process gpupdate.exe -ArgumentList "/force /wait:0" -Wait -PassThru).ExitCode
             }
             if ($ec -eq 0) { return @{ Status="OK";   Details="ExitCode=0" } }
@@ -577,10 +577,10 @@ $btnPing.Add_Click({
     Write-Sep
     if (Test-Connection -ComputerName $computer -Count 1 -Quiet) {
         Set-Status "  '$computer' esta ONLINE" ([System.Drawing.Color]::LightGreen)
-        Write-Ok "Ping OK → '$computer' accesible."
+        Write-Ok "Ping OK -> '$computer' accesible."
     } else {
         Set-Status "  '$computer' NO accesible" ([System.Drawing.Color]::Tomato)
-        Write-Fail "Ping FAIL → '$computer' no responde."
+        Write-Fail "Ping FAIL -> '$computer' no responde."
     }
     Write-Sep
     Append-Output "" ([System.Drawing.Color]::White)
@@ -638,20 +638,21 @@ $btnCancel.Add_Click({
     [System.Windows.Forms.Application]::DoEvents()
 })
 
-# Enter en el campo de equipo → ping
+# Enter en el campo de equipo ->ping
 $txtEquipo.Add_KeyDown({
     if ($_.KeyCode -eq "Enter") { $btnPing.PerformClick() }
 })
 
-# ── Mensaje de bienvenida ─────────────────────────────────────────
-Append-Output "  Herramienta de Administracion Remota v3.0" ([System.Drawing.Color]::FromArgb(0,190,255))
-Append-Output "  Accenture / Airbus  |  PowerShell 5.1"     $silver
-Write-Sep
-Append-Output "  > Introduce el nombre del equipo en el campo superior." $silver
-Append-Output "  > Usa 'Ping' para verificar conectividad antes de operar." $silver
-Append-Output "  > Los botones de accion se bloquean mientras hay una tarea en curso." $silver
-Write-Sep
-Append-Output "" $white
+$form.Add_Shown({
+    Append-Output "  Herramienta de Administracion Remota v3.0" ([System.Drawing.Color]::FromArgb(0,190,255))
+    Append-Output "  Accenture / Airbus  |  PowerShell 5.1"     $silver
+    Write-Sep
+    Append-Output "  > Introduce el nombre del equipo en el campo superior." $silver
+    Append-Output "  > Usa 'Ping' para verificar conectividad antes de operar." $silver
+    Append-Output "  > Los botones de accion se bloquean mientras hay una tarea en curso." $silver
+    Write-Sep
+    Append-Output "" $white
+})
 
 [System.Windows.Forms.Application]::Run($form)
 
