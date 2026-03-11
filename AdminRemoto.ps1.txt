@@ -652,6 +652,8 @@ $form.Add_Shown({
     Append-Output "  > Los botones de accion se bloquean mientras hay una tarea en curso." $silver
     Write-Sep
     Append-Output "" $white
+    $script:outputBox.SelectionStart = 0
+    $script:outputBox.ScrollToCaret()
 })
 
 [System.Windows.Forms.Application]::Run($form)
