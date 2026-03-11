@@ -231,17 +231,46 @@ function Invoke-MasterCheck {
                 return @{ Status="OK"; Details=($details -join " | ") }
             }
 
-            # Si falta algún cert, ofrecer re-inscripción automática
-            if ($result.Status -eq "ERROR" -and $result.Missing.Count -gt 0) {
-                $oferta = Confirm-Action "Faltan certificados Divisional en '$($script:Target)'.`nIntentar re-inscripcion automatica (certutil -pulse)?"
+            # Si falta algún cert, ofrecer inscripción directa via CES Kerberos
+            $missingCerts = @($result.Missing)
+            if ($result.Status -eq "ERROR" -and $missingCerts.Count -gt 0) {
+                $missingStr = $missingCerts -join ", "
+                $oferta = Confirm-Action "Faltan certs en '$($script:Target)': $missingStr.`nInscribir via CES Kerberos (aefews01/02) sin pasar por el servidor de directiva?"
                 if ($oferta) {
-                    Invoke-Step -Name "Re-inscripcion certificado (certutil -pulse)" -ScriptBlock {
-                        Invoke-Command -ComputerName $script:Target -ScriptBlock {
-                            # -pulse dispara el auto-enrollment del agente de certificados de Windows
-                            $out = certutil -pulse 2>&1
-                            $ec  = $LASTEXITCODE
-                            if ($ec -eq 0) { return @{ Status="OK";   Details="certutil -pulse OK. Los certs pueden tardar unos segundos en aparecer." } }
-                            else            { return @{ Status="WARN"; Details="certutil -pulse ExitCode=$ec | $($out -join ' ')" } }
+                    # Mapa cert -> URLs CES directas (evita el CEP que da timeout)
+                    $cesMap = @{
+                        "Breguet G1"  = @(
+                            "https://aefews01.autoenroll.pki.intra.corp/Airbus%20Issuing%20CA%20Breguet%20G1_CES_Kerberos/service.svc/CES",
+                            "https://aefews02.autoenroll.pki.intra.corp/Airbus%20Issuing%20CA%20Breguet%20G1_CES_Kerberos/service.svc/CES"
+                        )
+                        "da Vinci G1" = @(
+                            "https://aefews01.autoenroll.pki.intra.corp/Airbus%20Issuing%20CA%20da%20Vinci%20G1_CES_Kerberos/service.svc/CES",
+                            "https://aefews02.autoenroll.pki.intra.corp/Airbus%20Issuing%20CA%20da%20Vinci%20G1_CES_Kerberos/service.svc/CES"
+                        )
+                    }
+                    foreach ($certType in $missingCerts) {
+                        $urls   = $cesMap[$certType]
+                        $target = $script:Target
+                        $ct     = $certType
+                        Invoke-Step -Name "Inscribir $ct via CES" -ScriptBlock {
+                            Invoke-Command -ComputerName $target -ArgumentList $urls -ScriptBlock {
+                                param($cesUrls)
+                                # Get-Certificate apunta directamente al CES, sin CEP policy discovery
+                                $template = "AirbusAutoEnrolledClientAuthentication"
+                                foreach ($url in $cesUrls) {
+                                    try {
+                                        $r = Get-Certificate -Template $template -Url $url `
+                                             -CertStoreLocation "Cert:\LocalMachine\My" -ErrorAction Stop
+                                        if ($r.Status -eq "Issued") {
+                                            return @{ Status="OK"; Details="Emitido OK | Thumbprint=$($r.Certificate.Thumbprint) | via $url" }
+                                        }
+                                        return @{ Status="WARN"; Details="Estado=$($r.Status) | via $url" }
+                                    } catch {
+                                        # Probar siguiente servidor CES
+                                    }
+                                }
+                                return @{ Status="ERROR"; Details="Sin respuesta de ningun servidor CES. Verifica conectividad con aefews01/02." }
+                            }
                         }
                     }
                 }
