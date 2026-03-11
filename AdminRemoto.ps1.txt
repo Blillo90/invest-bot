@@ -407,7 +407,7 @@ $fontSmall = New-Object System.Drawing.Font("Segoe UI",     9)
 
 # ── Formulario ───────────────────────────────────────────────────
 $form                  = New-Object System.Windows.Forms.Form
-$form.Text             = "Administración Remota  ·  Accenture / Airbus"
+$form.Text             = "Administracion Remota  |  Accenture / Airbus"
 $form.Size             = New-Object System.Drawing.Size(920, 680)
 $form.MinimumSize      = New-Object System.Drawing.Size(720, 500)
 $form.BackColor        = $bgDark
@@ -442,7 +442,7 @@ function New-FlatButton {
 # ── Panel superior ────────────────────────────────────────────────
 $topPanel           = New-Object System.Windows.Forms.Panel
 $topPanel.Dock      = "Top"
-$topPanel.Height    = 118
+$topPanel.Height    = 138
 $topPanel.BackColor = $bgPanel
 $form.Controls.Add($topPanel)
 
@@ -457,7 +457,7 @@ $topPanel.Controls.Add($lblTitle)
 
 # Subtítulo
 $lblSub             = New-Object System.Windows.Forms.Label
-$lblSub.Text        = "  Accenture / Airbus  ·  PowerShell 5.1"
+$lblSub.Text        = "  Accenture / Airbus  |  PowerShell 5.1"
 $lblSub.Font        = $fontSmall
 $lblSub.ForeColor   = $silver
 $lblSub.AutoSize    = $true
@@ -494,10 +494,10 @@ $sep.BackColor  = [System.Drawing.Color]::FromArgb(70,70,70)
 $topPanel.Controls.Add($sep)
 
 # Botones de acción
-$btnMaster   = New-FlatButton "  Comprobar Masterización"  12 97 205 28 $accent
-$btnSoftware = New-FlatButton "  Comprobar Software SCCM" 225 97 205 28 $accent
-$btnUsb      = New-FlatButton "  Borrar Drivers USB"       438 97 165 28 $btnRed
-$btnClear    = New-FlatButton "  Limpiar"                  615 97  90 28 $btnGray
+$btnMaster   = New-FlatButton "  Comprobar Masterizacion"  10 100 225 30 $accent
+$btnSoftware = New-FlatButton "  Comprobar Software SCCM" 240 100 225 30 $accent
+$btnUsb      = New-FlatButton "  Borrar Drivers USB"       470 100 185 30 $btnRed
+$btnClear    = New-FlatButton "  Limpiar"                  660 100  95 30 $btnGray
 $topPanel.Controls.Add($btnMaster)
 $topPanel.Controls.Add($btnSoftware)
 $topPanel.Controls.Add($btnUsb)
@@ -617,12 +617,12 @@ $txtEquipo.Add_KeyDown({
 })
 
 # ── Mensaje de bienvenida ─────────────────────────────────────────
-Append-Output "  Herramienta de Administración Remota v3.0" ([System.Drawing.Color]::FromArgb(0,190,255))
-Append-Output "  Accenture / Airbus  |  PowerShell 5.1"      $silver
+Append-Output "  Herramienta de Administracion Remota v3.0" ([System.Drawing.Color]::FromArgb(0,190,255))
+Append-Output "  Accenture / Airbus  |  PowerShell 5.1"     $silver
 Write-Sep
-Append-Output "  · Introduce el nombre del equipo en el campo superior." $silver
-Append-Output "  · Usa 'Ping' para verificar conectividad antes de operar." $silver
-Append-Output "  · Los botones de acción se bloquean mientras hay una tarea en curso." $silver
+Append-Output "  > Introduce el nombre del equipo en el campo superior." $silver
+Append-Output "  > Usa 'Ping' para verificar conectividad antes de operar." $silver
+Append-Output "  > Los botones de accion se bloquean mientras hay una tarea en curso." $silver
 Write-Sep
 Append-Output "" $white
 
