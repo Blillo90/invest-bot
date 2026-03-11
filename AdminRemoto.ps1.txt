@@ -41,6 +41,7 @@ function Append-Output {
         $script:outputBox.SelectionLength = 0
         $script:outputBox.SelectionColor  = $color
         $script:outputBox.AppendText("$text`r`n")
+        $script:outputBox.SelectionStart  = $script:outputBox.TextLength
         $script:outputBox.ScrollToCaret()
         [System.Windows.Forms.Application]::DoEvents()
     }
