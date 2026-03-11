@@ -108,7 +108,7 @@ function Invoke-Step {
         [Parameter(Mandatory)][scriptblock]$ScriptBlock
     )
     Append-Output "" ([System.Drawing.Color]::White)
-    Write-Info "──── $Name ────"
+    Write-Info "---- $Name ----"
     try {
         $res     = & $ScriptBlock
         $status  = if ($res -is [hashtable] -and $res.Status)  { $res.Status }                        else { "OK" }
@@ -503,6 +503,18 @@ $topPanel.Controls.Add($btnSoftware)
 $topPanel.Controls.Add($btnUsb)
 $topPanel.Controls.Add($btnClear)
 
+# ── Área de salida ────────────────────────────────────────────────
+$script:outputBox              = New-Object System.Windows.Forms.RichTextBox
+$script:outputBox.Dock         = "Fill"
+$script:outputBox.BackColor    = $bgOutput
+$script:outputBox.ForeColor    = $white
+$script:outputBox.Font         = $fontMono
+$script:outputBox.ReadOnly     = $true
+$script:outputBox.BorderStyle  = "None"
+$script:outputBox.ScrollBars   = "Vertical"
+$script:outputBox.WordWrap     = $false
+$form.Controls.Add($script:outputBox)
+
 # ── Barra de estado ───────────────────────────────────────────────
 $statusBar           = New-Object System.Windows.Forms.Panel
 $statusBar.Dock      = "Bottom"
@@ -517,18 +529,6 @@ $script:statusLabel.ForeColor  = $white
 $script:statusLabel.Font       = $fontSmall
 $script:statusLabel.TextAlign  = "MiddleLeft"
 $statusBar.Controls.Add($script:statusLabel)
-
-# ── Área de salida ────────────────────────────────────────────────
-$script:outputBox              = New-Object System.Windows.Forms.RichTextBox
-$script:outputBox.Dock         = "Fill"
-$script:outputBox.BackColor    = $bgOutput
-$script:outputBox.ForeColor    = $white
-$script:outputBox.Font         = $fontMono
-$script:outputBox.ReadOnly     = $true
-$script:outputBox.BorderStyle  = "None"
-$script:outputBox.ScrollBars   = "Vertical"
-$script:outputBox.WordWrap     = $false
-$form.Controls.Add($script:outputBox)
 
 # ── Helpers de control ─────────────────────────────────────────────
 function Set-ButtonsEnabled {
