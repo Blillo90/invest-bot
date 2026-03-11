@@ -574,6 +574,7 @@ $btnPing.Add_Click({
     $computer = $txtEquipo.Text.Trim()
     if ([string]::IsNullOrEmpty($computer)) { return }
     Set-Status "Haciendo ping a '$computer'..." ([System.Drawing.Color]::Yellow)
+    Write-Sep
     if (Test-Connection -ComputerName $computer -Count 1 -Quiet) {
         Set-Status "  '$computer' esta ONLINE" ([System.Drawing.Color]::LightGreen)
         Write-Ok "Ping OK → '$computer' accesible."
@@ -581,6 +582,8 @@ $btnPing.Add_Click({
         Set-Status "  '$computer' NO accesible" ([System.Drawing.Color]::Tomato)
         Write-Fail "Ping FAIL → '$computer' no responde."
     }
+    Write-Sep
+    Append-Output "" ([System.Drawing.Color]::White)
 })
 
 $btnMaster.Add_Click({
