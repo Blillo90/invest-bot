@@ -1,0 +1,397 @@
+<#
+.SYNOPSIS
+    Herramienta de administración remota unificada — v2.0
+.DESCRIPTION
+    Menú con tres opciones de administración remota:
+      1. Comprobar Masterización de un equipo
+      2. Comprobar Software en Centro de Software (SCCM)
+      3. Borrar Drivers USB de un equipo
+.AUTHOR
+    Pablo Perez Herrero - AC1974
+.COMPANYNAME
+    Accenture
+.VERSION
+    2.0
+#>
+
+[CmdletBinding()]
+param(
+    [string]$ExpectedIssuerLike = "*Airbus Issuing CA Juan de la Cierva*",
+    [string]$TaskName           = "MasterizacionCheck_15min"
+)
+
+$ErrorActionPreference = "Continue"
+
+#region ═══════════════════════════════════════════════════════════
+# FUNCIONES COMUNES
+#═══════════════════════════════════════════════════════════════════
+
+function Write-Info { param($msg) Write-Host $msg            -ForegroundColor Cyan   }
+function Write-Ok   { param($msg) Write-Host "  OK: $msg"    -ForegroundColor Green  }
+function Write-Warn { param($msg) Write-Host "  WARN: $msg"  -ForegroundColor Yellow }
+function Write-Fail { param($msg) Write-Host "  ERROR: $msg" -ForegroundColor Red    }
+
+# Variables de script accesibles desde cualquier scope (incluyendo scriptblocks)
+$script:StepResults = [System.Collections.Generic.List[object]]::new()
+$script:Target      = ""   # Equipo remoto activo
+
+function Reset-StepResults {
+    $script:StepResults = [System.Collections.Generic.List[object]]::new()
+}
+
+function Add-StepResult {
+    param(
+        [Parameter(Mandatory)][string]$Step,
+        [Parameter(Mandatory)][ValidateSet("OK","WARN","ERROR")][string]$Status,
+        [string]$Details = ""
+    )
+    $script:StepResults.Add([PSCustomObject]@{
+        Step    = $Step
+        Status  = $Status
+        Details = $Details
+        Time    = (Get-Date)
+    }) | Out-Null
+}
+
+function Invoke-Step {
+    param(
+        [Parameter(Mandatory)][string]$Name,
+        [Parameter(Mandatory)][scriptblock]$ScriptBlock
+    )
+    Write-Host ""
+    Write-Info "──── $Name ────"
+    try {
+        $res     = & $ScriptBlock
+        $status  = if ($res -is [hashtable] -and $res.Status)  { $res.Status }                             else { "OK" }
+        $details = if ($res -is [hashtable] -and $res.Details) { ($res.Details | Out-String).Trim() }      else { "" }
+        Add-StepResult -Step $Name -Status $status -Details $details
+        switch ($status) {
+            "OK"    { Write-Ok   $Name }
+            "WARN"  { Write-Warn "$Name | $details" }
+            "ERROR" { Write-Fail "$Name | $details" }
+        }
+    } catch {
+        Add-StepResult -Step $Name -Status "ERROR" -Details $_.Exception.Message
+        Write-Fail "$Name | $($_.Exception.Message)"
+    }
+}
+
+function Show-Summary {
+    param([string]$ExcludeWarnStep = "")
+    Write-Host ""
+    Write-Info ("═" * 50)
+    Write-Info "RESUMEN FINAL"
+    Write-Info ("═" * 50)
+    $script:StepResults | Select-Object Step, Status, Time, Details | Format-Table -AutoSize
+
+    $blocked = $script:StepResults | Where-Object {
+        $_.Status -eq "ERROR" -or
+        ($_.Status -eq "WARN" -and ($ExcludeWarnStep -eq "" -or $_.Step -ne $ExcludeWarnStep))
+    }
+    Write-Host ""
+    if (-not $blocked) { Write-Ok  "TODO OK" }
+    else                { Write-Warn "Hay pasos con WARN/ERROR que requieren atención." }
+}
+
+function Get-RemoteComputer {
+    $computer = (Read-Host "`nNombre del equipo remoto").Trim()
+    if ([string]::IsNullOrEmpty($computer)) { return $null }
+    Write-Info "Comprobando conectividad con '$computer'..."
+    if (-not (Test-Connection -ComputerName $computer -Count 1 -Quiet)) {
+        Write-Fail "El equipo '$computer' no está accesible."
+        return $null
+    }
+    Write-Ok "Equipo '$computer' online."
+    return $computer
+}
+
+# Bloque SCCM compartido entre opciones 1 y 2 (se ejecuta EN el equipo remoto)
+$script:SccmCyclesBlock = {
+    $actions = @(
+        @{ Name="App Deployment Evaluation";   Id="{00000000-0000-0000-0000-000000000121}" },
+        @{ Name="Discovery Data Collection";   Id="{00000000-0000-0000-0000-000000000003}" },
+        @{ Name="Hardware Inventory";          Id="{00000000-0000-0000-0000-000000000001}" },
+        @{ Name="Machine Policy Retrieval";    Id="{00000000-0000-0000-0000-000000000021}" },
+        @{ Name="Machine Policy Evaluation";   Id="{00000000-0000-0000-0000-000000000022}" },
+        @{ Name="Software Inventory";          Id="{00000000-0000-0000-0000-000000000002}" },
+        @{ Name="SW Update Deployment Eval";   Id="{00000000-0000-0000-0000-000000000114}" },
+        @{ Name="Software Update Scan";        Id="{00000000-0000-0000-0000-000000000113}" },
+        @{ Name="State Message Refresh";       Id="{00000000-0000-0000-0000-000000000111}" }
+    )
+    $log = @(); $anyError = $false; $anyWarn = $false
+    foreach ($a in $actions) {
+        try {
+            $rv = [int](Invoke-WmiMethod -Namespace "root\ccm" -Class "SMS_Client" `
+                        -Name "TriggerSchedule" -ArgumentList @($a.Id)).ReturnValue
+            if ($rv -eq 0) { $log += "$($a.Name)=OK" }
+            else            { $log += "$($a.Name)=WARN($rv)"; $anyWarn = $true }
+        } catch {
+            $log += "$($a.Name)=ERROR($($_.Exception.Message))"; $anyError = $true
+        }
+    }
+    $s = if ($anyError) { "ERROR" } elseif ($anyWarn) { "WARN" } else { "OK" }
+    return @{ Status=$s; Details=($log -join " | ") }
+}
+
+#endregion
+
+#region ═══════════════════════════════════════════════════════════
+# OPCIÓN 1 — COMPROBAR MASTERIZACIÓN
+#═══════════════════════════════════════════════════════════════════
+
+function Invoke-MasterCheck {
+    param([Parameter(Mandatory)][string]$ComputerName)
+    $script:Target = $ComputerName
+    Reset-StepResults
+
+    Write-Info "`nMasterización de '$ComputerName'`n"
+
+    # 1. gpupdate remoto
+    Invoke-Step -Name "GPUPDATE /force" -ScriptBlock {
+        $ec = Invoke-Command -ComputerName $script:Target -ScriptBlock {
+            (Start-Process gpupdate.exe -ArgumentList "/force" -Wait -PassThru).ExitCode
+        }
+        if ($ec -eq 0) { return @{ Status="OK";   Details="ExitCode=0" } }
+        else            { return @{ Status="WARN"; Details="ExitCode=$ec" } }
+    }
+
+    # 2. Certificado
+    Invoke-Step -Name "Certificado LocalMachine\My" -ScriptBlock {
+        Invoke-Command -ComputerName $script:Target -ArgumentList $script:ExpectedIssuerLike -ScriptBlock {
+            param($issuer)
+            $certs = Get-ChildItem "Cert:\LocalMachine\My" -ErrorAction SilentlyContinue
+            if (-not $certs -or $certs.Count -eq 0) {
+                return @{ Status="ERROR"; Details="Sin certificados en LocalMachine\My" }
+            }
+            $details = @()
+            $status  = "OK"
+            if ($certs.Count -gt 1) {
+                $details += "Hay $($certs.Count) certs (debería haber solo 1)"
+                $status   = "WARN"
+            }
+            $cert = $certs[0]
+            if ($cert.Issuer -notlike $issuer) {
+                return @{ Status="ERROR"; Details="Issuer no coincide: $($cert.Issuer)" }
+            }
+            if ($cert.NotAfter -le (Get-Date)) {
+                return @{ Status="ERROR"; Details="Certificado CADUCADO: NotAfter=$($cert.NotAfter)" }
+            }
+            $details += "Issuer=$($cert.Issuer) | NotAfter=$($cert.NotAfter)"
+            return @{ Status=$status; Details=($details -join " | ") }
+        }
+    }
+
+    # 3. success.txt
+    Invoke-Step -Name "success.txt" -ScriptBlock {
+        Invoke-Command -ComputerName $script:Target -ScriptBlock {
+            $f = Get-Item "C:\success.txt" -ErrorAction SilentlyContinue
+            if (-not $f) { return @{ Status="ERROR"; Details="No existe C:\success.txt" } }
+            $s = if ($f.LastWriteTime.Date -eq (Get-Date).Date) { "OK" } else { "WARN" }
+            return @{ Status=$s; Details="Fecha: $($f.LastWriteTime)" }
+        }
+    }
+
+    # 4. Ciclos SCCM
+    Invoke-Step -Name "SCCM Client Cycles" -ScriptBlock {
+        Invoke-Command -ComputerName $script:Target -ScriptBlock $script:SccmCyclesBlock
+    }
+
+    # 5. Centro de Software
+    Invoke-Step -Name "Centro de Software (CCM_Application)" -ScriptBlock {
+        $app = Get-CimInstance -ComputerName $script:Target -Namespace "root\ccm\ClientSDK" `
+                               -ClassName "CCM_Application" -ErrorAction SilentlyContinue |
+               Select-Object -First 1
+        if ($app) { return @{ Status="OK";    Details="Namespace accesible" } }
+        else       { return @{ Status="ERROR"; Details="Sin resultados en CCM_Application" } }
+    }
+
+    # 6. Cisco Secure Client
+    Invoke-Step -Name "Cisco Secure Client" -ScriptBlock {
+        $found = Invoke-Command -ComputerName $script:Target -ScriptBlock {
+            $paths = @(
+                "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*",
+                "HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*"
+            )
+            foreach ($p in $paths) {
+                $m = Get-ItemProperty $p -ErrorAction SilentlyContinue |
+                     Where-Object { $_.DisplayName -like "*Cisco Secure Client*" -or $_.DisplayName -like "*Cisco AnyConnect*" } |
+                     Select-Object -First 1
+                if ($m) { return "$($m.DisplayName) v$($m.DisplayVersion)" }
+            }
+        }
+        if ($found) { return @{ Status="OK";    Details=$found } }
+        else         { return @{ Status="ERROR"; Details="No encontrado en Uninstall" } }
+    }
+
+    # 7. Trellix / McAfee
+    Invoke-Step -Name "Trellix / McAfee" -ScriptBlock {
+        $found = Invoke-Command -ComputerName $script:Target -ScriptBlock {
+            $paths = @(
+                "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*",
+                "HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*"
+            )
+            foreach ($p in $paths) {
+                $m = Get-ItemProperty $p -ErrorAction SilentlyContinue |
+                     Where-Object { $_.DisplayName -like "*Trellix*" -or $_.DisplayName -like "*McAfee*" -or $_.DisplayName -like "*Endpoint Security*" } |
+                     Select-Object -First 1
+                if ($m) { return "$($m.DisplayName) v$($m.DisplayVersion)" }
+            }
+        }
+        if ($found) { return @{ Status="OK";    Details=$found } }
+        else         { return @{ Status="ERROR"; Details="No encontrado en Uninstall" } }
+    }
+
+    Show-Summary -ExcludeWarnStep "success.txt"
+
+    # Tarea programada opcional en el equipo remoto
+    if ((Read-Host "`n¿Instalar tarea programada en '$ComputerName' cada 15 min? (Y/N)").ToLower() -eq "y") {
+        $ps1Remote = Read-Host "Ruta del .ps1 EN el equipo remoto (ej: C:\Scripts\Master-Checker.ps1)"
+        Invoke-Command -ComputerName $ComputerName -ArgumentList $script:TaskName, $ps1Remote -ScriptBlock {
+            param($tName, $ps1Path)
+            $st = (Get-Date).AddMinutes(1).ToString("HH:mm")
+            $tr = "powershell.exe -NoProfile -ExecutionPolicy Bypass -File `"$ps1Path`" -AutoRemoveTask"
+            schtasks.exe /Create /TN $tName /SC MINUTE /MO 15 /RU SYSTEM /ST $st /TR $tr /F | Out-Null
+            Write-Host "Tarea '$tName' creada en el equipo remoto."
+        }
+    }
+}
+
+#endregion
+
+#region ═══════════════════════════════════════════════════════════
+# OPCIÓN 2 — COMPROBAR SOFTWARE EN CENTRO DE SOFTWARE
+#═══════════════════════════════════════════════════════════════════
+
+function Invoke-SoftwareCheck {
+    param([Parameter(Mandatory)][string]$ComputerName)
+    $script:Target = $ComputerName
+
+    $appName = (Read-Host "Nombre o ID de la aplicación a buscar").Trim()
+
+    $apps = Get-CimInstance -ComputerName $ComputerName -Namespace "root\ccm\ClientSDK" `
+                            -ClassName "CCM_Application" -ErrorAction SilentlyContinue |
+            Where-Object { $_.Name -like "*$appName*" }
+
+    if ($apps) {
+        Write-Ok "Aplicación(es) encontrada(s) en '$ComputerName':"
+        $apps | Select-Object Name, InstallState, SoftwareVersion | Format-Table -AutoSize
+        return
+    }
+
+    Write-Warn "'$appName' no está en el Centro de Software de '$ComputerName'."
+
+    if ((Read-Host "¿Forzar ciclos SCCM en '$ComputerName'? (Y/N)").ToLower() -ne "y") { return }
+
+    Reset-StepResults
+
+    Invoke-Step -Name "SCCM Client Cycles" -ScriptBlock {
+        Invoke-Command -ComputerName $script:Target -ScriptBlock $script:SccmCyclesBlock
+    }
+
+    if ((Read-Host "`n¿Ejecutar gpupdate /force en '$ComputerName'? (Y/N)").ToLower() -eq "y") {
+        Invoke-Step -Name "GPUPDATE /force" -ScriptBlock {
+            $ec = Invoke-Command -ComputerName $script:Target -ScriptBlock {
+                (Start-Process gpupdate.exe -ArgumentList "/force" -Wait -PassThru).ExitCode
+            }
+            if ($ec -eq 0) { return @{ Status="OK";   Details="ExitCode=0" } }
+            else            { return @{ Status="WARN"; Details="ExitCode=$ec" } }
+        }
+    }
+
+    Show-Summary
+}
+
+#endregion
+
+#region ═══════════════════════════════════════════════════════════
+# OPCIÓN 3 — BORRAR DRIVERS USB
+#═══════════════════════════════════════════════════════════════════
+
+function Invoke-UsbDriverClean {
+    param([Parameter(Mandatory)][string]$ComputerName)
+
+    Write-Info "Obteniendo drivers USB de '$ComputerName'..."
+
+    $drivers = Invoke-Command -ComputerName $ComputerName -ScriptBlock {
+        Get-PnpDevice | Where-Object {
+            $_.FriendlyName -match "USB" -and $_.Class -match "USB"
+        } | Sort-Object Class | Select-Object Status, Class, FriendlyName, InstanceId
+    }
+
+    if (-not $drivers -or @($drivers).Count -eq 0) {
+        Write-Warn "No se encontraron drivers USB en '$ComputerName'."
+        return
+    }
+
+    Write-Host "`nDrivers USB en '$ComputerName':"
+    Write-Host "Status   Class                     FriendlyName"
+    Write-Host ("─" * 65)
+    foreach ($d in $drivers) {
+        Write-Host "$($d.Status.ToString().PadRight(8)) $($d.Class.ToString().PadRight(25)) $($d.FriendlyName)"
+    }
+
+    if ((Read-Host "`n¿Eliminar estos drivers en '$ComputerName'? (Y/N)").ToLower() -ne "y") {
+        Write-Host "Operación cancelada."
+        return
+    }
+
+    $ids = @($drivers | ForEach-Object { $_.InstanceId })
+    Invoke-Command -ComputerName $ComputerName -ArgumentList (,$ids) -ScriptBlock {
+        param($instanceIds)
+        foreach ($id in $instanceIds) {
+            Write-Host "Eliminando: $id"
+            pnputil /remove-device "$id"
+        }
+    }
+
+    Write-Ok "Proceso de eliminación completado."
+
+    if ((Read-Host "`n¿Reiniciar '$ComputerName' ahora? (Y/N)").ToLower() -eq "y") {
+        Restart-Computer -ComputerName $ComputerName -Force
+        Write-Ok "Reiniciando '$ComputerName'..."
+    }
+}
+
+#endregion
+
+#region ═══════════════════════════════════════════════════════════
+# MENÚ PRINCIPAL
+#═══════════════════════════════════════════════════════════════════
+
+function Show-Menu {
+    Clear-Host
+    Write-Host ("═" * 55) -ForegroundColor Cyan
+    Write-Host "   ADMINISTRACIÓN REMOTA  ·  Accenture / Airbus" -ForegroundColor Cyan
+    Write-Host ("═" * 55) -ForegroundColor Cyan
+    Write-Host ""
+    Write-Host "  [1]  Comprobar Masterización"    -ForegroundColor White
+    Write-Host "  [2]  Comprobar Software (SCCM)"  -ForegroundColor White
+    Write-Host "  [3]  Borrar Drivers USB"          -ForegroundColor White
+    Write-Host "  [0]  Salir"                       -ForegroundColor DarkGray
+    Write-Host ""
+}
+
+do {
+    Show-Menu
+    $choice = Read-Host "Selecciona una opción"
+    switch ($choice) {
+        "1" {
+            $target = Get-RemoteComputer
+            if ($target) { Invoke-MasterCheck    -ComputerName $target; Read-Host "`nPulsa ENTER para continuar" }
+        }
+        "2" {
+            $target = Get-RemoteComputer
+            if ($target) { Invoke-SoftwareCheck  -ComputerName $target; Read-Host "`nPulsa ENTER para continuar" }
+        }
+        "3" {
+            $target = Get-RemoteComputer
+            if ($target) { Invoke-UsbDriverClean -ComputerName $target; Read-Host "`nPulsa ENTER para continuar" }
+        }
+        "0" { break }
+        default { Write-Warn "Opción no válida."; Start-Sleep -Seconds 1 }
+    }
+} while ($choice -ne "0")
+
+Write-Host "`nCerrando. Hasta luego.`n" -ForegroundColor Cyan
+
+#endregion
