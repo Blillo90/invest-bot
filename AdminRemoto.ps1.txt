@@ -252,25 +252,66 @@ function Invoke-MasterCheck {
                         $urls   = $cesMap[$certType]
                         $target = $script:Target
                         $ct     = $certType
-                        Invoke-Step -Name "Inscribir $ct via CES" -ScriptBlock {
-                            Invoke-Command -ComputerName $target -ArgumentList $urls -ScriptBlock {
-                                param($cesUrls)
-                                # Obtener nombre OID interno de la plantilla (puede diferir del display name)
+                        Invoke-Step -Name "Inscribir $ct via CES (SYSTEM)" -ScriptBlock {
+                            Invoke-Command -ComputerName $target -ArgumentList $urls,$ct -ScriptBlock {
+                                param($cesUrls, $certType)
+                                # Get-Certificate falla desde PSRemoting porque intenta LoadPolicy (CEP)
+                                # incluso al darle una URL CES directa. Solucion: ejecutar como SYSTEM
+                                # via tarea programada temporal — SYSTEM tiene ticket Kerberos de maquina
+                                # y accede al CES sin restricciones de doble salto.
+                                $taskName  = "AirbusEnroll_$(Get-Random -Maximum 9999)"
+                                $resultPath = "$env:TEMP\$taskName.txt"
                                 $template  = "AirbusAutoEnrolledClientAuthentication"
-                                $errors    = @()
-                                foreach ($url in $cesUrls) {
-                                    try {
-                                        $r = Get-Certificate -Template $template -Url $url `
-                                             -CertStoreLocation "Cert:\LocalMachine\My" -ErrorAction Stop
-                                        if ($r.Status -eq "Issued") {
-                                            return @{ Status="OK"; Details="Emitido OK | Thumbprint=$($r.Certificate.Thumbprint) | via $url" }
-                                        }
-                                        $errors += "[$url] Estado=$($r.Status)"
-                                    } catch {
-                                        $errors += "[$url] EX: $($_.Exception.Message)"
+
+                                # Script que corre como SYSTEM: prueba cada URL CES y escribe resultado
+                                $urlsJoined = $cesUrls -join "','"
+                                $psCode = @"
+`$template = '$template'
+`$resultFile = '$resultPath'
+`$cesUrls = @('$urlsJoined')
+foreach (`$url in `$cesUrls) {
+    try {
+        `$r = Get-Certificate -Template `$template -Url `$url -CertStoreLocation 'Cert:\LocalMachine\My' -ErrorAction Stop
+        if (`$r.Status -eq 'Issued') {
+            "OK|Thumbprint=`$(`$r.Certificate.Thumbprint)|`$url" | Out-File `$resultFile -Encoding UTF8
+            exit 0
+        }
+        "WARN|Estado=`$(`$r.Status)|`$url" | Out-File `$resultFile -Encoding UTF8
+    } catch {
+        "ERROR|`$(`$_.Exception.Message)|`$url" | Out-File `$resultFile -Encoding UTF8
+    }
+}
+if (-not (Test-Path `$resultFile)) { "ERROR|SinResultado|ninguna" | Out-File `$resultFile -Encoding UTF8 }
+"@
+                                $encoded = [Convert]::ToBase64String(
+                                    [System.Text.Encoding]::Unicode.GetBytes($psCode))
+
+                                try {
+                                    $action    = New-ScheduledTaskAction -Execute "powershell.exe" `
+                                                    -Argument "-NonInteractive -WindowStyle Hidden -EncodedCommand $encoded"
+                                    $principal = New-ScheduledTaskPrincipal -UserId "SYSTEM" -RunLevel Highest
+                                    Register-ScheduledTask -TaskName $taskName -Action $action `
+                                        -Principal $principal -Force | Out-Null
+                                    Start-ScheduledTask -TaskName $taskName
+
+                                    # Esperar resultado (max 45 s)
+                                    $timeout = 45
+                                    while ($timeout -gt 0 -and -not (Test-Path $resultPath)) {
+                                        Start-Sleep -Seconds 1; $timeout--
                                     }
+                                    Unregister-ScheduledTask -TaskName $taskName -Confirm:$false -ErrorAction SilentlyContinue
+
+                                    if (Test-Path $resultPath) {
+                                        $line   = (Get-Content $resultPath -Raw -Encoding UTF8).Trim()
+                                        Remove-Item $resultPath -Force -ErrorAction SilentlyContinue
+                                        $parts  = $line -split '\|', 3
+                                        return @{ Status=$parts[0]; Details="$($parts[1]) | via $($parts[2])" }
+                                    }
+                                    return @{ Status="ERROR"; Details="Timeout 45s esperando resultado de inscripcion" }
+                                } catch {
+                                    Unregister-ScheduledTask -TaskName $taskName -Confirm:$false -ErrorAction SilentlyContinue
+                                    return @{ Status="ERROR"; Details="Error creando tarea: $($_.Exception.Message)" }
                                 }
-                                return @{ Status="ERROR"; Details="Sin exito en CES. Errores: $($errors -join ' || ')" }
                             }
                         }
                     }
