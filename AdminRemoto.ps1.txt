@@ -192,8 +192,8 @@ function Invoke-MasterCheck {
     Write-Sep
 
     Invoke-Step -Name "GPUPDATE /force" -ScriptBlock {
-        $ec = Invoke-Command -ComputerName $script:Target -ScriptBlock {
-            (Start-Process gpupdate.exe -ArgumentList "/force" -Wait -PassThru).ExitCode
+        $ec = Invoke-Command -ComputerName $script:Target -TimeoutSecs 60 -ScriptBlock {
+            (Start-Process gpupdate.exe -ArgumentList "/force /wait:0" -Wait -PassThru).ExitCode
         }
         if ($ec -eq 0) { return @{ Status="OK";   Details="ExitCode=0" } }
         else            { return @{ Status="WARN"; Details="ExitCode=$ec" } }
@@ -324,8 +324,8 @@ function Invoke-SoftwareCheck {
 
     if (Confirm-Action "Ejecutar gpupdate /force en '$ComputerName'?") {
         Invoke-Step -Name "GPUPDATE /force" -ScriptBlock {
-            $ec = Invoke-Command -ComputerName $script:Target -ScriptBlock {
-                (Start-Process gpupdate.exe -ArgumentList "/force" -Wait -PassThru).ExitCode
+            $ec = Invoke-Command -ComputerName $script:Target -TimeoutSecs 60 -ScriptBlock {
+                (Start-Process gpupdate.exe -ArgumentList "/force /wait:0" -Wait -PassThru).ExitCode
             }
             if ($ec -eq 0) { return @{ Status="OK";   Details="ExitCode=0" } }
             else            { return @{ Status="WARN"; Details="ExitCode=$ec" } }
