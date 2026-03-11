@@ -31,8 +31,9 @@ $ErrorActionPreference = "Continue"
 # FUNCIONES DE SALIDA GUI
 #═══════════════════════════════════════════════════════════════════
 
-$script:outputBox   = $null
-$script:statusLabel = $null
+$script:outputBox        = $null
+$script:statusLabel      = $null
+$script:cancelRequested  = $false
 
 function Append-Output {
     param([string]$text, [System.Drawing.Color]$color)
@@ -108,6 +109,10 @@ function Invoke-Step {
         [Parameter(Mandatory)][string]$Name,
         [Parameter(Mandatory)][scriptblock]$ScriptBlock
     )
+    if ($script:cancelRequested) {
+        Write-Warn "Cancelado antes de: $Name"
+        return
+    }
     Append-Output "" ([System.Drawing.Color]::White)
     Write-Info "---- $Name ----"
     try {
@@ -499,10 +504,13 @@ $btnMaster   = New-FlatButton "  Comprobar Masterizacion"  10 100 225 30 $accent
 $btnSoftware = New-FlatButton "  Comprobar Software SCCM" 240 100 225 30 $accent
 $btnUsb      = New-FlatButton "  Borrar Drivers USB"       470 100 185 30 $btnRed
 $btnClear    = New-FlatButton "  Limpiar"                  660 100  95 30 $btnGray
+$btnCancel   = New-FlatButton "  Cancelar"                 760 100 100 30 ([System.Drawing.Color]::FromArgb(200,100,0))
+$btnCancel.Enabled = $false
 $topPanel.Controls.Add($btnMaster)
 $topPanel.Controls.Add($btnSoftware)
 $topPanel.Controls.Add($btnUsb)
 $topPanel.Controls.Add($btnClear)
+$topPanel.Controls.Add($btnCancel)
 
 # ── Área de salida ────────────────────────────────────────────────
 $script:outputBox              = New-Object System.Windows.Forms.RichTextBox
@@ -538,6 +546,7 @@ function Set-ButtonsEnabled {
     $btnSoftware.Enabled = $enabled
     $btnUsb.Enabled      = $enabled
     $btnPing.Enabled     = $enabled
+    $btnCancel.Enabled   = -not $enabled
 }
 
 function Get-ValidComputer {
@@ -577,39 +586,53 @@ $btnPing.Add_Click({
 $btnMaster.Add_Click({
     $target = Get-ValidComputer
     if (-not $target) { return }
+    $script:cancelRequested = $false
     Set-ButtonsEnabled $false
     Set-Status "Comprobando masterizacion de '$target'..." ([System.Drawing.Color]::Yellow)
     try   { Invoke-MasterCheck   -ComputerName $target }
     catch { Write-Fail "Error inesperado: $_" }
     Set-ButtonsEnabled $true
-    Set-Status "Finalizado" ([System.Drawing.Color]::LightGreen)
+    Set-Status $(if ($script:cancelRequested) { "Cancelado" } else { "Finalizado" }) ([System.Drawing.Color]::$(if ($script:cancelRequested) { "Orange" } else { "LightGreen" }))
+    $script:cancelRequested = $false
 })
 
 $btnSoftware.Add_Click({
     $target = Get-ValidComputer
     if (-not $target) { return }
+    $script:cancelRequested = $false
     Set-ButtonsEnabled $false
     Set-Status "Consultando Centro de Software de '$target'..." ([System.Drawing.Color]::Yellow)
     try   { Invoke-SoftwareCheck -ComputerName $target }
     catch { Write-Fail "Error inesperado: $_" }
     Set-ButtonsEnabled $true
-    Set-Status "Finalizado" ([System.Drawing.Color]::LightGreen)
+    Set-Status $(if ($script:cancelRequested) { "Cancelado" } else { "Finalizado" }) ([System.Drawing.Color]::$(if ($script:cancelRequested) { "Orange" } else { "LightGreen" }))
+    $script:cancelRequested = $false
 })
 
 $btnUsb.Add_Click({
     $target = Get-ValidComputer
     if (-not $target) { return }
+    $script:cancelRequested = $false
     Set-ButtonsEnabled $false
     Set-Status "Obteniendo drivers USB de '$target'..." ([System.Drawing.Color]::Yellow)
     try   { Invoke-UsbDriverClean -ComputerName $target }
     catch { Write-Fail "Error inesperado: $_" }
     Set-ButtonsEnabled $true
-    Set-Status "Finalizado" ([System.Drawing.Color]::LightGreen)
+    Set-Status $(if ($script:cancelRequested) { "Cancelado" } else { "Finalizado" }) ([System.Drawing.Color]::$(if ($script:cancelRequested) { "Orange" } else { "LightGreen" }))
+    $script:cancelRequested = $false
 })
 
 $btnClear.Add_Click({
     $script:outputBox.Clear()
     Set-Status "Listo" $white
+})
+
+$btnCancel.Add_Click({
+    $script:cancelRequested = $true
+    Write-Warn "Cancelacion solicitada - abortando sesiones remotas..."
+    Set-Status "Cancelando..." ([System.Drawing.Color]::Orange)
+    Get-PSSession | Remove-PSSession -ErrorAction SilentlyContinue
+    [System.Windows.Forms.Application]::DoEvents()
 })
 
 # Enter en el campo de equipo → ping
