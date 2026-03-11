@@ -34,6 +34,7 @@ $ErrorActionPreference = "Continue"
 $script:outputBox        = $null
 $script:statusLabel      = $null
 $script:cancelRequested  = $false
+$script:Modo             = "Nacional"   # "Nacional" | "Divisional"
 
 function Append-Output {
     param([string]$text, [System.Drawing.Color]$color)
@@ -193,7 +194,7 @@ function Invoke-MasterCheck {
     $script:Target = $ComputerName
     Reset-StepResults
 
-    Write-Info "Masterizacion de '$ComputerName'"
+    Write-Info "Masterizacion de '$ComputerName'  [Modo: $($script:Modo)]"
     Write-Sep
 
     Invoke-Step -Name "GPUPDATE /force" -ScriptBlock {
@@ -204,20 +205,67 @@ function Invoke-MasterCheck {
         else            { return @{ Status="WARN"; Details="ExitCode=$ec" } }
     }
 
-    Invoke-Step -Name "Certificado LocalMachine\My" -ScriptBlock {
-        Invoke-Command -ComputerName $script:Target -ArgumentList $script:ExpectedIssuerLike -ScriptBlock {
-            param($issuer)
-            $certs = Get-ChildItem "Cert:\LocalMachine\My" -ErrorAction SilentlyContinue
-            if (-not $certs -or $certs.Count -eq 0) {
-                return @{ Status="ERROR"; Details="Sin certificados en LocalMachine\My" }
+    if ($script:Modo -eq "Divisional") {
+        # ── Divisional: deben existir exactamente 2 certs "da Vinci G1" vigentes ──
+        Invoke-Step -Name "Certificados Divisional (da Vinci G1)" -ScriptBlock {
+            $result = Invoke-Command -ComputerName $script:Target -ScriptBlock {
+                $issuerFilter = "*Airbus Issuing CA da Vinci G1*"
+                $all   = Get-ChildItem "Cert:\LocalMachine\My" -ErrorAction SilentlyContinue
+                $certs = $all | Where-Object { $_.Issuer -like $issuerFilter }
+                $now   = Get-Date
+                $details = @(); $missing = @()
+
+                # Comprobar cert 1 (aefews01 — da Vinci G1)
+                $c1 = $certs | Where-Object { $_.NotAfter -gt $now } | Sort-Object NotAfter -Descending | Select-Object -First 1
+                if (-not $c1) { $missing += "da Vinci G1 (primer cert)" }
+                else { $details += "Cert1: Issuer=$($c1.Issuer) | Expira=$($c1.NotAfter.ToString('dd/MM/yyyy'))" }
+
+                # Comprobar cert 2 (segundo cert independiente)
+                $c2 = $certs | Where-Object { $_.NotAfter -gt $now -and $_.Thumbprint -ne $c1.Thumbprint } |
+                               Sort-Object NotAfter -Descending | Select-Object -First 1
+                if (-not $c2) { $missing += "da Vinci G1 (segundo cert)" }
+                else { $details += "Cert2: Issuer=$($c2.Issuer) | Expira=$($c2.NotAfter.ToString('dd/MM/yyyy'))" }
+
+                if ($missing.Count -gt 0) {
+                    return @{ Status="ERROR"; Details="FALTA: $($missing -join ', ')  |  $($details -join ' | ')"; Missing=$missing }
+                }
+                return @{ Status="OK"; Details=($details -join " | ") }
             }
-            $details = @(); $status = "OK"
-            if ($certs.Count -gt 1) { $details += "Hay $($certs.Count) certs (debe ser 1)"; $status = "WARN" }
-            $cert = $certs[0]
-            if ($cert.Issuer -notlike $issuer) { return @{ Status="ERROR"; Details="Issuer no coincide: $($cert.Issuer)" } }
-            if ($cert.NotAfter -le (Get-Date))  { return @{ Status="ERROR"; Details="CADUCADO: NotAfter=$($cert.NotAfter)" } }
-            $details += "Issuer=$($cert.Issuer) | NotAfter=$($cert.NotAfter)"
-            return @{ Status=$status; Details=($details -join " | ") }
+
+            # Si falta algún cert, ofrecer re-inscripción automática
+            if ($result.Status -eq "ERROR" -and $result.Missing.Count -gt 0) {
+                $oferta = Confirm-Action "Faltan certificados Divisional en '$($script:Target)'.`nIntentar re-inscripcion automatica (certutil -pulse)?"
+                if ($oferta) {
+                    Invoke-Step -Name "Re-inscripcion certificado (certutil -pulse)" -ScriptBlock {
+                        Invoke-Command -ComputerName $script:Target -ScriptBlock {
+                            # -pulse dispara el auto-enrollment del agente de certificados de Windows
+                            $out = certutil -pulse 2>&1
+                            $ec  = $LASTEXITCODE
+                            if ($ec -eq 0) { return @{ Status="OK";   Details="certutil -pulse OK. Los certs pueden tardar unos segundos en aparecer." } }
+                            else            { return @{ Status="WARN"; Details="certutil -pulse ExitCode=$ec | $($out -join ' ')" } }
+                        }
+                    }
+                }
+            }
+            return $result
+        }
+    } else {
+        # ── Nacional: 1 cert con el issuer del parametro ──
+        Invoke-Step -Name "Certificado LocalMachine\My" -ScriptBlock {
+            Invoke-Command -ComputerName $script:Target -ArgumentList $script:ExpectedIssuerLike -ScriptBlock {
+                param($issuer)
+                $certs = Get-ChildItem "Cert:\LocalMachine\My" -ErrorAction SilentlyContinue
+                if (-not $certs -or $certs.Count -eq 0) {
+                    return @{ Status="ERROR"; Details="Sin certificados en LocalMachine\My" }
+                }
+                $details = @(); $status = "OK"
+                if ($certs.Count -gt 1) { $details += "Hay $($certs.Count) certs (debe ser 1)"; $status = "WARN" }
+                $cert = $certs[0]
+                if ($cert.Issuer -notlike $issuer) { return @{ Status="ERROR"; Details="Issuer no coincide: $($cert.Issuer)" } }
+                if ($cert.NotAfter -le (Get-Date))  { return @{ Status="ERROR"; Details="CADUCADO: NotAfter=$($cert.NotAfter)" } }
+                $details += "Issuer=$($cert.Issuer) | NotAfter=$($cert.NotAfter)"
+                return @{ Status=$status; Details=($details -join " | ") }
+            }
         }
     }
 
@@ -448,7 +496,7 @@ function New-FlatButton {
 # ── Panel superior ────────────────────────────────────────────────
 $topPanel           = New-Object System.Windows.Forms.Panel
 $topPanel.Dock      = "Top"
-$topPanel.Height    = 138
+$topPanel.Height    = 158
 $topPanel.BackColor = $bgPanel
 $form.Controls.Add($topPanel)
 
@@ -492,19 +540,48 @@ $topPanel.Controls.Add($txtEquipo)
 $btnPing = New-FlatButton "Ping" 340 57 60 30 $btnGray
 $topPanel.Controls.Add($btnPing)
 
+# Fila 2: selector de modo Nacional / Divisional
+$lblModo            = New-Object System.Windows.Forms.Label
+$lblModo.Text       = "Modo:"
+$lblModo.ForeColor  = $silver
+$lblModo.AutoSize   = $true
+$lblModo.Location   = New-Object System.Drawing.Point(12, 93)
+$topPanel.Controls.Add($lblModo)
+
+$rbNacional              = New-Object System.Windows.Forms.RadioButton
+$rbNacional.Text         = "Nacional"
+$rbNacional.ForeColor    = $white
+$rbNacional.AutoSize     = $true
+$rbNacional.Checked      = $true
+$rbNacional.Location     = New-Object System.Drawing.Point(58, 90)
+$rbNacional.Font         = $fontSmall
+$topPanel.Controls.Add($rbNacional)
+
+$rbDivisional            = New-Object System.Windows.Forms.RadioButton
+$rbDivisional.Text       = "Divisional"
+$rbDivisional.ForeColor  = $white
+$rbDivisional.AutoSize   = $true
+$rbDivisional.Location   = New-Object System.Drawing.Point(145, 90)
+$rbDivisional.Font       = $fontSmall
+$topPanel.Controls.Add($rbDivisional)
+
+$rbNacional.Add_CheckedChanged({
+    $script:Modo = if ($rbNacional.Checked) { "Nacional" } else { "Divisional" }
+})
+
 # Separador visual (Line)
 $sep            = New-Object System.Windows.Forms.Panel
-$sep.Location   = New-Object System.Drawing.Point(0, 94)
+$sep.Location   = New-Object System.Drawing.Point(0, 114)
 $sep.Size       = New-Object System.Drawing.Size(2000, 1)
 $sep.BackColor  = [System.Drawing.Color]::FromArgb(70,70,70)
 $topPanel.Controls.Add($sep)
 
 # Botones de acción
-$btnMaster   = New-FlatButton "  Comprobar Masterizacion"  10 100 225 30 $accent
-$btnSoftware = New-FlatButton "  Comprobar Software SCCM" 240 100 225 30 $accent
-$btnUsb      = New-FlatButton "  Borrar Drivers USB"       470 100 185 30 $btnRed
-$btnClear    = New-FlatButton "  Limpiar"                  660 100  95 30 $btnGray
-$btnCancel   = New-FlatButton "  Cancelar"                 760 100 100 30 ([System.Drawing.Color]::FromArgb(200,100,0))
+$btnMaster   = New-FlatButton "  Comprobar Masterizacion"  10 120 225 30 $accent
+$btnSoftware = New-FlatButton "  Comprobar Software SCCM" 240 120 225 30 $accent
+$btnUsb      = New-FlatButton "  Borrar Drivers USB"       470 120 185 30 $btnRed
+$btnClear    = New-FlatButton "  Limpiar"                  660 120  95 30 $btnGray
+$btnCancel   = New-FlatButton "  Cancelar"                 760 120 100 30 ([System.Drawing.Color]::FromArgb(200,100,0))
 $btnCancel.Enabled = $false
 $topPanel.Controls.Add($btnMaster)
 $topPanel.Controls.Add($btnSoftware)
