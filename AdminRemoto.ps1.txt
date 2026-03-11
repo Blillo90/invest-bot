@@ -290,11 +290,25 @@ CertificateTemplate = "AirbusAutoEnrolledClientAuthentication"
                                     return @{ Status="ERROR"; Details="certreq -new fallo (ExitCode=$LASTEXITCODE): $($newOut -join ' ')" }
                                 }
 
-                                # Intentar cada servidor CES directamente
+                                # Intentar cada servidor CES directamente (timeout 20s por intento)
                                 $lastErr = ""
+                                $cesTimeoutSec = 20
                                 foreach ($url in $cesUrls) {
-                                    $submitOut = certreq -submit -config $url -q -MachineStore $reqPath $cerPath 2>&1
-                                    if ($LASTEXITCODE -eq 0 -and (Test-Path $cerPath)) {
+                                    $job = Start-Job -ScriptBlock {
+                                        param($u,$rq,$cp)
+                                        certreq -submit -config $u -q -MachineStore $rq $cp 2>&1
+                                    } -ArgumentList $url,$reqPath,$cerPath
+                                    $null = Wait-Job $job -Timeout $cesTimeoutSec
+                                    if ($job.State -eq 'Running') {
+                                        Stop-Job $job; Remove-Job $job -Force
+                                        $lastErr = "$url TIMEOUT (>${cesTimeoutSec}s)"
+                                        Remove-Item $cerPath -Force -ErrorAction SilentlyContinue
+                                        continue
+                                    }
+                                    $submitOut = Receive-Job $job
+                                    $submitExit = $job.ChildJobs[0].Error.Count -gt 0 ? 1 : 0
+                                    Remove-Job $job -Force
+                                    if ($submitExit -eq 0 -and (Test-Path $cerPath)) {
                                         $acceptOut = certreq -accept -machine $cerPath 2>&1
                                         Remove-Item $infPath,$reqPath,$cerPath -Force -ErrorAction SilentlyContinue
                                         if ($LASTEXITCODE -eq 0) {
@@ -302,7 +316,7 @@ CertificateTemplate = "AirbusAutoEnrolledClientAuthentication"
                                         }
                                         return @{ Status="WARN"; Details="Emitido pero accept fallo: $($acceptOut -join ' ') | via $url" }
                                     }
-                                    $lastErr = "$url ExitCode=$($LASTEXITCODE): $($submitOut -join ' ')"
+                                    $lastErr = "$url ExitCode=$($submitExit): $($submitOut -join ' ')"
                                     Remove-Item $cerPath -Force -ErrorAction SilentlyContinue
                                 }
 
