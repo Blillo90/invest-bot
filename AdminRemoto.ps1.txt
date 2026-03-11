@@ -1,8 +1,9 @@
+#Requires -Version 5.1
 <#
 .SYNOPSIS
-    Herramienta de administración remota unificada — v2.0
+    Herramienta de administración remota unificada — v3.0 (GUI)
 .DESCRIPTION
-    Menú con tres opciones de administración remota:
+    Interfaz gráfica con tres opciones de administración remota:
       1. Comprobar Masterización de un equipo
       2. Comprobar Software en Centro de Software (SCCM)
       3. Borrar Drivers USB de un equipo
@@ -11,7 +12,7 @@
 .COMPANYNAME
     Accenture
 .VERSION
-    2.0
+    3.0
 #>
 
 [CmdletBinding()]
@@ -20,20 +21,68 @@ param(
     [string]$TaskName           = "MasterizacionCheck_15min"
 )
 
+Add-Type -AssemblyName System.Windows.Forms
+Add-Type -AssemblyName System.Drawing
+Add-Type -AssemblyName Microsoft.VisualBasic
+
 $ErrorActionPreference = "Continue"
 
 #region ═══════════════════════════════════════════════════════════
-# FUNCIONES COMUNES
+# FUNCIONES DE SALIDA GUI
 #═══════════════════════════════════════════════════════════════════
 
-function Write-Info { param($msg) Write-Host $msg            -ForegroundColor Cyan   }
-function Write-Ok   { param($msg) Write-Host "  OK: $msg"    -ForegroundColor Green  }
-function Write-Warn { param($msg) Write-Host "  WARN: $msg"  -ForegroundColor Yellow }
-function Write-Fail { param($msg) Write-Host "  ERROR: $msg" -ForegroundColor Red    }
+$script:outputBox   = $null
+$script:statusLabel = $null
 
-# Variables de script accesibles desde cualquier scope (incluyendo scriptblocks)
+function Append-Output {
+    param([string]$text, [System.Drawing.Color]$color)
+    if ($script:outputBox) {
+        $script:outputBox.SelectionStart  = $script:outputBox.TextLength
+        $script:outputBox.SelectionLength = 0
+        $script:outputBox.SelectionColor  = $color
+        $script:outputBox.AppendText("$text`r`n")
+        $script:outputBox.ScrollToCaret()
+        [System.Windows.Forms.Application]::DoEvents()
+    }
+}
+
+function Write-Info { param($msg) Append-Output $msg            ([System.Drawing.Color]::Cyan)                        }
+function Write-Ok   { param($msg) Append-Output "  OK: $msg"   ([System.Drawing.Color]::LightGreen)                  }
+function Write-Warn { param($msg) Append-Output "  WARN: $msg" ([System.Drawing.Color]::Yellow)                      }
+function Write-Fail { param($msg) Append-Output "  ERROR: $msg"([System.Drawing.Color]::Tomato)                      }
+function Write-Sep  {             Append-Output ("─" * 65)     ([System.Drawing.Color]::FromArgb(80, 80, 80))         }
+
+function Set-Status {
+    param([string]$msg, [System.Drawing.Color]$color = [System.Drawing.Color]::White)
+    if ($script:statusLabel) {
+        $script:statusLabel.Text      = "  $msg"
+        $script:statusLabel.ForeColor = $color
+        [System.Windows.Forms.Application]::DoEvents()
+    }
+}
+
+function Confirm-Action {
+    param([string]$message, [string]$title = "Confirmar")
+    $r = [System.Windows.Forms.MessageBox]::Show(
+        $message, $title,
+        [System.Windows.Forms.MessageBoxButtons]::YesNo,
+        [System.Windows.Forms.MessageBoxIcon]::Question)
+    return ($r -eq [System.Windows.Forms.DialogResult]::Yes)
+}
+
+function Get-Input {
+    param([string]$prompt, [string]$title = "Entrada requerida", [string]$default = "")
+    return [Microsoft.VisualBasic.Interaction]::InputBox($prompt, $title, $default)
+}
+
+#endregion
+
+#region ═══════════════════════════════════════════════════════════
+# LÓGICA COMÚN
+#═══════════════════════════════════════════════════════════════════
+
 $script:StepResults = New-Object System.Collections.Generic.List[object]
-$script:Target      = ""   # Equipo remoto activo
+$script:Target      = ""
 
 function Reset-StepResults {
     $script:StepResults = New-Object System.Collections.Generic.List[object]
@@ -58,12 +107,12 @@ function Invoke-Step {
         [Parameter(Mandatory)][string]$Name,
         [Parameter(Mandatory)][scriptblock]$ScriptBlock
     )
-    Write-Host ""
+    Append-Output "" ([System.Drawing.Color]::White)
     Write-Info "──── $Name ────"
     try {
         $res     = & $ScriptBlock
-        $status  = if ($res -is [hashtable] -and $res.Status)  { $res.Status }                             else { "OK" }
-        $details = if ($res -is [hashtable] -and $res.Details) { ($res.Details | Out-String).Trim() }      else { "" }
+        $status  = if ($res -is [hashtable] -and $res.Status)  { $res.Status }                        else { "OK" }
+        $details = if ($res -is [hashtable] -and $res.Details) { ($res.Details | Out-String).Trim() } else { "" }
         Add-StepResult -Step $Name -Status $status -Details $details
         switch ($status) {
             "OK"    { Write-Ok   $Name }
@@ -78,34 +127,28 @@ function Invoke-Step {
 
 function Show-Summary {
     param([string]$ExcludeWarnStep = "")
-    Write-Host ""
-    Write-Info ("═" * 50)
+    Append-Output "" ([System.Drawing.Color]::White)
+    Write-Sep
     Write-Info "RESUMEN FINAL"
-    Write-Info ("═" * 50)
-    $script:StepResults | Select-Object Step, Status, Time, Details | Format-Table -AutoSize
-
+    Write-Sep
+    foreach ($r in $script:StepResults) {
+        $line = "  {0,-40} [{1}]  {2}" -f $r.Step, $r.Status, $r.Details
+        switch ($r.Status) {
+            "OK"    { Append-Output $line ([System.Drawing.Color]::LightGreen) }
+            "WARN"  { Append-Output $line ([System.Drawing.Color]::Yellow)     }
+            "ERROR" { Append-Output $line ([System.Drawing.Color]::Tomato)     }
+        }
+    }
     $blocked = $script:StepResults | Where-Object {
         $_.Status -eq "ERROR" -or
         ($_.Status -eq "WARN" -and ($ExcludeWarnStep -eq "" -or $_.Step -ne $ExcludeWarnStep))
     }
-    Write-Host ""
+    Append-Output "" ([System.Drawing.Color]::White)
     if (-not $blocked) { Write-Ok  "TODO OK" }
     else                { Write-Warn "Hay pasos con WARN/ERROR que requieren atención." }
 }
 
-function Get-RemoteComputer {
-    $computer = (Read-Host "`nNombre del equipo remoto").Trim()
-    if ([string]::IsNullOrEmpty($computer)) { return $null }
-    Write-Info "Comprobando conectividad con '$computer'..."
-    if (-not (Test-Connection -ComputerName $computer -Count 1 -Quiet)) {
-        Write-Fail "El equipo '$computer' no está accesible."
-        return $null
-    }
-    Write-Ok "Equipo '$computer' online."
-    return $computer
-}
-
-# Bloque SCCM compartido entre opciones 1 y 2 (se ejecuta EN el equipo remoto)
+# Bloque SCCM compartido (se ejecuta en el equipo remoto)
 $script:SccmCyclesBlock = {
     $actions = @(
         @{ Name="App Deployment Evaluation";   Id="{00000000-0000-0000-0000-000000000121}" },
@@ -144,9 +187,9 @@ function Invoke-MasterCheck {
     $script:Target = $ComputerName
     Reset-StepResults
 
-    Write-Info "`nMasterización de '$ComputerName'`n"
+    Write-Info "Masterización de '$ComputerName'"
+    Write-Sep
 
-    # 1. gpupdate remoto
     Invoke-Step -Name "GPUPDATE /force" -ScriptBlock {
         $ec = Invoke-Command -ComputerName $script:Target -ScriptBlock {
             (Start-Process gpupdate.exe -ArgumentList "/force" -Wait -PassThru).ExitCode
@@ -155,7 +198,6 @@ function Invoke-MasterCheck {
         else            { return @{ Status="WARN"; Details="ExitCode=$ec" } }
     }
 
-    # 2. Certificado
     Invoke-Step -Name "Certificado LocalMachine\My" -ScriptBlock {
         Invoke-Command -ComputerName $script:Target -ArgumentList $script:ExpectedIssuerLike -ScriptBlock {
             param($issuer)
@@ -163,25 +205,16 @@ function Invoke-MasterCheck {
             if (-not $certs -or $certs.Count -eq 0) {
                 return @{ Status="ERROR"; Details="Sin certificados en LocalMachine\My" }
             }
-            $details = @()
-            $status  = "OK"
-            if ($certs.Count -gt 1) {
-                $details += "Hay $($certs.Count) certs (debería haber solo 1)"
-                $status   = "WARN"
-            }
+            $details = @(); $status = "OK"
+            if ($certs.Count -gt 1) { $details += "Hay $($certs.Count) certs (debe ser 1)"; $status = "WARN" }
             $cert = $certs[0]
-            if ($cert.Issuer -notlike $issuer) {
-                return @{ Status="ERROR"; Details="Issuer no coincide: $($cert.Issuer)" }
-            }
-            if ($cert.NotAfter -le (Get-Date)) {
-                return @{ Status="ERROR"; Details="Certificado CADUCADO: NotAfter=$($cert.NotAfter)" }
-            }
+            if ($cert.Issuer -notlike $issuer) { return @{ Status="ERROR"; Details="Issuer no coincide: $($cert.Issuer)" } }
+            if ($cert.NotAfter -le (Get-Date))  { return @{ Status="ERROR"; Details="CADUCADO: NotAfter=$($cert.NotAfter)" } }
             $details += "Issuer=$($cert.Issuer) | NotAfter=$($cert.NotAfter)"
             return @{ Status=$status; Details=($details -join " | ") }
         }
     }
 
-    # 3. success.txt
     Invoke-Step -Name "success.txt" -ScriptBlock {
         Invoke-Command -ComputerName $script:Target -ScriptBlock {
             $f = Get-Item "C:\success.txt" -ErrorAction SilentlyContinue
@@ -191,12 +224,10 @@ function Invoke-MasterCheck {
         }
     }
 
-    # 4. Ciclos SCCM
     Invoke-Step -Name "SCCM Client Cycles" -ScriptBlock {
         Invoke-Command -ComputerName $script:Target -ScriptBlock $script:SccmCyclesBlock
     }
 
-    # 5. Centro de Software
     Invoke-Step -Name "Centro de Software (CCM_Application)" -ScriptBlock {
         $app = Get-CimInstance -ComputerName $script:Target -Namespace "root\ccm\ClientSDK" `
                                -ClassName "CCM_Application" -ErrorAction SilentlyContinue |
@@ -205,13 +236,10 @@ function Invoke-MasterCheck {
         else       { return @{ Status="ERROR"; Details="Sin resultados en CCM_Application" } }
     }
 
-    # 6. Cisco Secure Client
     Invoke-Step -Name "Cisco Secure Client" -ScriptBlock {
         $found = Invoke-Command -ComputerName $script:Target -ScriptBlock {
-            $paths = @(
-                "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*",
-                "HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*"
-            )
+            $paths = @("HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*",
+                       "HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*")
             foreach ($p in $paths) {
                 $m = Get-ItemProperty $p -ErrorAction SilentlyContinue |
                      Where-Object { $_.DisplayName -like "*Cisco Secure Client*" -or $_.DisplayName -like "*Cisco AnyConnect*" } |
@@ -223,13 +251,10 @@ function Invoke-MasterCheck {
         else         { return @{ Status="ERROR"; Details="No encontrado en Uninstall" } }
     }
 
-    # 7. Trellix / McAfee
     Invoke-Step -Name "Trellix / McAfee" -ScriptBlock {
         $found = Invoke-Command -ComputerName $script:Target -ScriptBlock {
-            $paths = @(
-                "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*",
-                "HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*"
-            )
+            $paths = @("HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*",
+                       "HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*")
             foreach ($p in $paths) {
                 $m = Get-ItemProperty $p -ErrorAction SilentlyContinue |
                      Where-Object { $_.DisplayName -like "*Trellix*" -or $_.DisplayName -like "*McAfee*" -or $_.DisplayName -like "*Endpoint Security*" } |
@@ -243,15 +268,16 @@ function Invoke-MasterCheck {
 
     Show-Summary -ExcludeWarnStep "success.txt"
 
-    # Tarea programada opcional en el equipo remoto
-    if ((Read-Host "`n¿Instalar tarea programada en '$ComputerName' cada 15 min? (Y/N)").ToLower() -eq "y") {
-        $ps1Remote = Read-Host "Ruta del .ps1 EN el equipo remoto (ej: C:\Scripts\Master-Checker.ps1)"
-        Invoke-Command -ComputerName $ComputerName -ArgumentList $script:TaskName, $ps1Remote -ScriptBlock {
-            param($tName, $ps1Path)
-            $st = (Get-Date).AddMinutes(1).ToString("HH:mm")
-            $tr = "powershell.exe -NoProfile -ExecutionPolicy Bypass -File `"$ps1Path`" -AutoRemoveTask"
-            schtasks.exe /Create /TN $tName /SC MINUTE /MO 15 /RU SYSTEM /ST $st /TR $tr /F | Out-Null
-            Write-Host "Tarea '$tName' creada en el equipo remoto."
+    if (Confirm-Action "¿Instalar tarea programada en '$ComputerName' cada 15 min?") {
+        $ps1Remote = Get-Input "Ruta del .ps1 EN el equipo remoto`n(ej: C:\Scripts\Master-Checker.ps1)" "Tarea programada"
+        if (-not [string]::IsNullOrWhiteSpace($ps1Remote)) {
+            Invoke-Command -ComputerName $ComputerName -ArgumentList $script:TaskName, $ps1Remote -ScriptBlock {
+                param($tName, $ps1Path)
+                $st = (Get-Date).AddMinutes(1).ToString("HH:mm")
+                $tr = "powershell.exe -NoProfile -ExecutionPolicy Bypass -File `"$ps1Path`" -AutoRemoveTask"
+                schtasks.exe /Create /TN $tName /SC MINUTE /MO 15 /RU SYSTEM /ST $st /TR $tr /F | Out-Null
+            }
+            Write-Ok "Tarea '$($script:TaskName)' creada en '$ComputerName'."
         }
     }
 }
@@ -266,21 +292,28 @@ function Invoke-SoftwareCheck {
     param([Parameter(Mandatory)][string]$ComputerName)
     $script:Target = $ComputerName
 
-    $appName = (Read-Host "Nombre o ID de la aplicación a buscar").Trim()
+    $appName = Get-Input "Nombre o ID de la aplicación a buscar" "Buscar en Centro de Software"
+    if ([string]::IsNullOrWhiteSpace($appName)) { return }
+
+    Write-Info "Buscando '$appName' en '$ComputerName'..."
+    Write-Sep
 
     $apps = Get-CimInstance -ComputerName $ComputerName -Namespace "root\ccm\ClientSDK" `
                             -ClassName "CCM_Application" -ErrorAction SilentlyContinue |
             Where-Object { $_.Name -like "*$appName*" }
 
     if ($apps) {
-        Write-Ok "Aplicación(es) encontrada(s) en '$ComputerName':"
-        $apps | Select-Object Name, InstallState, SoftwareVersion | Format-Table -AutoSize
+        Write-Ok "Aplicación(es) encontrada(s):"
+        foreach ($a in $apps) {
+            Append-Output ("    · {0}  |  Estado: {1}  |  Versión: {2}" -f $a.Name, $a.InstallState, $a.SoftwareVersion) `
+                          ([System.Drawing.Color]::LightGreen)
+        }
         return
     }
 
     Write-Warn "'$appName' no está en el Centro de Software de '$ComputerName'."
 
-    if ((Read-Host "¿Forzar ciclos SCCM en '$ComputerName'? (Y/N)").ToLower() -ne "y") { return }
+    if (-not (Confirm-Action "¿Forzar ciclos SCCM en '$ComputerName'?")) { return }
 
     Reset-StepResults
 
@@ -288,7 +321,7 @@ function Invoke-SoftwareCheck {
         Invoke-Command -ComputerName $script:Target -ScriptBlock $script:SccmCyclesBlock
     }
 
-    if ((Read-Host "`n¿Ejecutar gpupdate /force en '$ComputerName'? (Y/N)").ToLower() -eq "y") {
+    if (Confirm-Action "¿Ejecutar gpupdate /force en '$ComputerName'?") {
         Invoke-Step -Name "GPUPDATE /force" -ScriptBlock {
             $ec = Invoke-Command -ComputerName $script:Target -ScriptBlock {
                 (Start-Process gpupdate.exe -ArgumentList "/force" -Wait -PassThru).ExitCode
@@ -311,6 +344,7 @@ function Invoke-UsbDriverClean {
     param([Parameter(Mandatory)][string]$ComputerName)
 
     Write-Info "Obteniendo drivers USB de '$ComputerName'..."
+    Write-Sep
 
     $drivers = Invoke-Command -ComputerName $ComputerName -ScriptBlock {
         Get-PnpDevice | Where-Object {
@@ -323,30 +357,25 @@ function Invoke-UsbDriverClean {
         return
     }
 
-    Write-Host "`nDrivers USB en '$ComputerName':"
-    Write-Host "Status   Class                     FriendlyName"
-    Write-Host ("─" * 65)
+    Write-Info "Drivers USB encontrados:"
     foreach ($d in $drivers) {
-        Write-Host "$($d.Status.ToString().PadRight(8)) $($d.Class.ToString().PadRight(25)) $($d.FriendlyName)"
+        Append-Output ("    {0,-10} {1,-25} {2}" -f $d.Status, $d.Class, $d.FriendlyName) `
+                      ([System.Drawing.Color]::LightYellow)
     }
 
-    if ((Read-Host "`n¿Eliminar estos drivers en '$ComputerName'? (Y/N)").ToLower() -ne "y") {
-        Write-Host "Operación cancelada."
+    if (-not (Confirm-Action "¿Eliminar estos $(@($drivers).Count) driver(s) USB en '$ComputerName'?")) {
+        Write-Warn "Operación cancelada."
         return
     }
 
     $ids = @($drivers | ForEach-Object { $_.InstanceId })
     Invoke-Command -ComputerName $ComputerName -ArgumentList (,$ids) -ScriptBlock {
         param($instanceIds)
-        foreach ($id in $instanceIds) {
-            Write-Host "Eliminando: $id"
-            pnputil /remove-device "$id"
-        }
+        foreach ($id in $instanceIds) { pnputil /remove-device "$id" }
     }
+    Write-Ok "Drivers eliminados."
 
-    Write-Ok "Proceso de eliminación completado."
-
-    if ((Read-Host "`n¿Reiniciar '$ComputerName' ahora? (Y/N)").ToLower() -eq "y") {
+    if (Confirm-Action "¿Reiniciar '$ComputerName' ahora?") {
         Restart-Computer -ComputerName $ComputerName -Force
         Write-Ok "Reiniciando '$ComputerName'..."
     }
@@ -355,43 +384,248 @@ function Invoke-UsbDriverClean {
 #endregion
 
 #region ═══════════════════════════════════════════════════════════
-# MENÚ PRINCIPAL
+# INTERFAZ GRÁFICA (WinForms)
 #═══════════════════════════════════════════════════════════════════
 
-function Show-Menu {
-    Clear-Host
-    Write-Host ("═" * 55) -ForegroundColor Cyan
-    Write-Host "   ADMINISTRACIÓN REMOTA  ·  Accenture / Airbus" -ForegroundColor Cyan
-    Write-Host ("═" * 55) -ForegroundColor Cyan
-    Write-Host ""
-    Write-Host "  [1]  Comprobar Masterización"    -ForegroundColor White
-    Write-Host "  [2]  Comprobar Software (SCCM)"  -ForegroundColor White
-    Write-Host "  [3]  Borrar Drivers USB"          -ForegroundColor White
-    Write-Host "  [0]  Salir"                       -ForegroundColor DarkGray
-    Write-Host ""
+$script:ExpectedIssuerLike = $ExpectedIssuerLike
+
+# ── Colores y fuentes ────────────────────────────────────────────
+$bgDark      = [System.Drawing.Color]::FromArgb(28,  28,  28)
+$bgPanel     = [System.Drawing.Color]::FromArgb(45,  45,  48)
+$bgOutput    = [System.Drawing.Color]::FromArgb(16,  16,  16)
+$accent      = [System.Drawing.Color]::FromArgb(0,   122, 204)
+$accentHover = [System.Drawing.Color]::FromArgb(0,   160, 240)
+$btnRed      = [System.Drawing.Color]::FromArgb(160, 40,  40)
+$btnGray     = [System.Drawing.Color]::FromArgb(62,  62,  66)
+$white       = [System.Drawing.Color]::White
+$silver      = [System.Drawing.Color]::Silver
+
+$fontUI    = New-Object System.Drawing.Font("Segoe UI",    10)
+$fontMono  = New-Object System.Drawing.Font("Consolas",     9)
+$fontTitle = New-Object System.Drawing.Font("Segoe UI",    13, [System.Drawing.FontStyle]::Bold)
+$fontSmall = New-Object System.Drawing.Font("Segoe UI",     9)
+
+# ── Formulario ───────────────────────────────────────────────────
+$form                  = New-Object System.Windows.Forms.Form
+$form.Text             = "Administración Remota  ·  Accenture / Airbus"
+$form.Size             = New-Object System.Drawing.Size(920, 680)
+$form.MinimumSize      = New-Object System.Drawing.Size(720, 500)
+$form.BackColor        = $bgDark
+$form.ForeColor        = $white
+$form.Font             = $fontUI
+$form.StartPosition    = "CenterScreen"
+$form.FormBorderStyle  = "Sizable"
+
+# ── Helper para crear botones ─────────────────────────────────────
+function New-FlatButton {
+    param(
+        [string]$text,
+        [int]$x, [int]$y,
+        [int]$width  = 195,
+        [int]$height = 30,
+        [System.Drawing.Color]$bg
+    )
+    $b                           = New-Object System.Windows.Forms.Button
+    $b.Text                      = $text
+    $b.Location                  = New-Object System.Drawing.Point($x, $y)
+    $b.Size                      = New-Object System.Drawing.Size($width, $height)
+    $b.BackColor                 = $bg
+    $b.ForeColor                 = $white
+    $b.FlatStyle                 = "Flat"
+    $b.FlatAppearance.BorderSize = 1
+    $b.FlatAppearance.BorderColor= [System.Drawing.Color]::FromArgb(80,80,80)
+    $b.Cursor                    = "Hand"
+    $b.Font                      = $fontSmall
+    return $b
 }
 
-do {
-    Show-Menu
-    $choice = Read-Host "Selecciona una opción"
-    switch ($choice) {
-        "1" {
-            $target = Get-RemoteComputer
-            if ($target) { Invoke-MasterCheck    -ComputerName $target; Read-Host "`nPulsa ENTER para continuar" }
-        }
-        "2" {
-            $target = Get-RemoteComputer
-            if ($target) { Invoke-SoftwareCheck  -ComputerName $target; Read-Host "`nPulsa ENTER para continuar" }
-        }
-        "3" {
-            $target = Get-RemoteComputer
-            if ($target) { Invoke-UsbDriverClean -ComputerName $target; Read-Host "`nPulsa ENTER para continuar" }
-        }
-        "0" { break }
-        default { Write-Warn "Opción no válida."; Start-Sleep -Seconds 1 }
-    }
-} while ($choice -ne "0")
+# ── Panel superior ────────────────────────────────────────────────
+$topPanel           = New-Object System.Windows.Forms.Panel
+$topPanel.Dock      = "Top"
+$topPanel.Height    = 118
+$topPanel.BackColor = $bgPanel
+$form.Controls.Add($topPanel)
 
-Write-Host "`nCerrando. Hasta luego.`n" -ForegroundColor Cyan
+# Título
+$lblTitle           = New-Object System.Windows.Forms.Label
+$lblTitle.Text      = "  ADMINISTRACIÓN REMOTA"
+$lblTitle.Font      = $fontTitle
+$lblTitle.ForeColor = [System.Drawing.Color]::FromArgb(0, 190, 255)
+$lblTitle.AutoSize  = $true
+$lblTitle.Location  = New-Object System.Drawing.Point(8, 8)
+$topPanel.Controls.Add($lblTitle)
+
+# Subtítulo
+$lblSub             = New-Object System.Windows.Forms.Label
+$lblSub.Text        = "  Accenture / Airbus  ·  PowerShell 5.1"
+$lblSub.Font        = $fontSmall
+$lblSub.ForeColor   = $silver
+$lblSub.AutoSize    = $true
+$lblSub.Location    = New-Object System.Drawing.Point(8, 34)
+$topPanel.Controls.Add($lblSub)
+
+# Label "Equipo:"
+$lblEquipo          = New-Object System.Windows.Forms.Label
+$lblEquipo.Text     = "Equipo:"
+$lblEquipo.ForeColor= $silver
+$lblEquipo.AutoSize = $true
+$lblEquipo.Location = New-Object System.Drawing.Point(12, 60)
+$topPanel.Controls.Add($lblEquipo)
+
+# TextBox nombre equipo
+$txtEquipo              = New-Object System.Windows.Forms.TextBox
+$txtEquipo.Width        = 260
+$txtEquipo.Location     = New-Object System.Drawing.Point(68, 57)
+$txtEquipo.BackColor    = [System.Drawing.Color]::FromArgb(55, 55, 58)
+$txtEquipo.ForeColor    = $white
+$txtEquipo.BorderStyle  = "FixedSingle"
+$txtEquipo.Font         = $fontUI
+$topPanel.Controls.Add($txtEquipo)
+
+# Botón Ping
+$btnPing = New-FlatButton "Ping" 340 57 60 30 $btnGray
+$topPanel.Controls.Add($btnPing)
+
+# Separador visual (Line)
+$sep            = New-Object System.Windows.Forms.Panel
+$sep.Location   = New-Object System.Drawing.Point(0, 94)
+$sep.Size       = New-Object System.Drawing.Size(2000, 1)
+$sep.BackColor  = [System.Drawing.Color]::FromArgb(70,70,70)
+$topPanel.Controls.Add($sep)
+
+# Botones de acción
+$btnMaster   = New-FlatButton "  Comprobar Masterización"  12 97 205 28 $accent
+$btnSoftware = New-FlatButton "  Comprobar Software SCCM" 225 97 205 28 $accent
+$btnUsb      = New-FlatButton "  Borrar Drivers USB"       438 97 165 28 $btnRed
+$btnClear    = New-FlatButton "  Limpiar"                  615 97  90 28 $btnGray
+$topPanel.Controls.Add($btnMaster)
+$topPanel.Controls.Add($btnSoftware)
+$topPanel.Controls.Add($btnUsb)
+$topPanel.Controls.Add($btnClear)
+
+# ── Barra de estado ───────────────────────────────────────────────
+$statusBar           = New-Object System.Windows.Forms.Panel
+$statusBar.Dock      = "Bottom"
+$statusBar.Height    = 24
+$statusBar.BackColor = $accent
+$form.Controls.Add($statusBar)
+
+$script:statusLabel            = New-Object System.Windows.Forms.Label
+$script:statusLabel.Text       = "  Listo — introduce un equipo y pulsa una acción"
+$script:statusLabel.Dock       = "Fill"
+$script:statusLabel.ForeColor  = $white
+$script:statusLabel.Font       = $fontSmall
+$script:statusLabel.TextAlign  = "MiddleLeft"
+$statusBar.Controls.Add($script:statusLabel)
+
+# ── Área de salida ────────────────────────────────────────────────
+$script:outputBox              = New-Object System.Windows.Forms.RichTextBox
+$script:outputBox.Dock         = "Fill"
+$script:outputBox.BackColor    = $bgOutput
+$script:outputBox.ForeColor    = $white
+$script:outputBox.Font         = $fontMono
+$script:outputBox.ReadOnly     = $true
+$script:outputBox.BorderStyle  = "None"
+$script:outputBox.ScrollBars   = "Vertical"
+$script:outputBox.WordWrap     = $false
+$form.Controls.Add($script:outputBox)
+
+# ── Helpers de control ─────────────────────────────────────────────
+function Set-ButtonsEnabled {
+    param([bool]$enabled)
+    $btnMaster.Enabled   = $enabled
+    $btnSoftware.Enabled = $enabled
+    $btnUsb.Enabled      = $enabled
+    $btnPing.Enabled     = $enabled
+}
+
+function Get-ValidComputer {
+    $computer = $txtEquipo.Text.Trim()
+    if ([string]::IsNullOrEmpty($computer)) {
+        [System.Windows.Forms.MessageBox]::Show(
+            "Introduce el nombre del equipo remoto.",
+            "Campo requerido",
+            [System.Windows.Forms.MessageBoxButtons]::OK,
+            [System.Windows.Forms.MessageBoxIcon]::Warning) | Out-Null
+        return $null
+    }
+    Set-Status "Comprobando conectividad con '$computer'..." ([System.Drawing.Color]::Yellow)
+    if (-not (Test-Connection -ComputerName $computer -Count 1 -Quiet)) {
+        Write-Fail "El equipo '$computer' no está accesible."
+        Set-Status "Equipo no accesible" ([System.Drawing.Color]::Tomato)
+        return $null
+    }
+    Write-Ok "Equipo '$computer' online."
+    return $computer
+}
+
+# ── Eventos ───────────────────────────────────────────────────────
+$btnPing.Add_Click({
+    $computer = $txtEquipo.Text.Trim()
+    if ([string]::IsNullOrEmpty($computer)) { return }
+    Set-Status "Haciendo ping a '$computer'..." ([System.Drawing.Color]::Yellow)
+    if (Test-Connection -ComputerName $computer -Count 1 -Quiet) {
+        Set-Status "  '$computer' está ONLINE" ([System.Drawing.Color]::LightGreen)
+        Write-Ok "Ping OK → '$computer' accesible."
+    } else {
+        Set-Status "  '$computer' NO accesible" ([System.Drawing.Color]::Tomato)
+        Write-Fail "Ping FAIL → '$computer' no responde."
+    }
+})
+
+$btnMaster.Add_Click({
+    $target = Get-ValidComputer
+    if (-not $target) { return }
+    Set-ButtonsEnabled $false
+    Set-Status "Comprobando masterización de '$target'..." ([System.Drawing.Color]::Yellow)
+    try   { Invoke-MasterCheck   -ComputerName $target }
+    catch { Write-Fail "Error inesperado: $_" }
+    Set-ButtonsEnabled $true
+    Set-Status "Finalizado" ([System.Drawing.Color]::LightGreen)
+})
+
+$btnSoftware.Add_Click({
+    $target = Get-ValidComputer
+    if (-not $target) { return }
+    Set-ButtonsEnabled $false
+    Set-Status "Consultando Centro de Software de '$target'..." ([System.Drawing.Color]::Yellow)
+    try   { Invoke-SoftwareCheck -ComputerName $target }
+    catch { Write-Fail "Error inesperado: $_" }
+    Set-ButtonsEnabled $true
+    Set-Status "Finalizado" ([System.Drawing.Color]::LightGreen)
+})
+
+$btnUsb.Add_Click({
+    $target = Get-ValidComputer
+    if (-not $target) { return }
+    Set-ButtonsEnabled $false
+    Set-Status "Obteniendo drivers USB de '$target'..." ([System.Drawing.Color]::Yellow)
+    try   { Invoke-UsbDriverClean -ComputerName $target }
+    catch { Write-Fail "Error inesperado: $_" }
+    Set-ButtonsEnabled $true
+    Set-Status "Finalizado" ([System.Drawing.Color]::LightGreen)
+})
+
+$btnClear.Add_Click({
+    $script:outputBox.Clear()
+    Set-Status "Listo" $white
+})
+
+# Enter en el campo de equipo → ping
+$txtEquipo.Add_KeyDown({
+    if ($_.KeyCode -eq "Enter") { $btnPing.PerformClick() }
+})
+
+# ── Mensaje de bienvenida ─────────────────────────────────────────
+Append-Output "  Herramienta de Administración Remota v3.0" ([System.Drawing.Color]::FromArgb(0,190,255))
+Append-Output "  Accenture / Airbus — PowerShell 5.1"       $silver
+Write-Sep
+Append-Output "  · Introduce el nombre del equipo en el campo superior." $silver
+Append-Output "  · Usa 'Ping' para verificar conectividad antes de operar." $silver
+Append-Output "  · Los botones de acción se bloquean mientras hay una tarea en curso." $silver
+Write-Sep
+Append-Output "" $white
+
+[System.Windows.Forms.Application]::Run($form)
 
 #endregion
