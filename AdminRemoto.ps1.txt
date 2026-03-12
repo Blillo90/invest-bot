@@ -413,11 +413,31 @@ RequestType   = PKCS10
     }
 
     Invoke-Step -Name "Centro de Software (CCM_Application)" -ScriptBlock {
-        $app = Get-CimInstance -ComputerName $script:Target -Namespace "root\ccm\ClientSDK" `
-                               -ClassName "CCM_Application" -ErrorAction SilentlyContinue |
-               Select-Object -First 1
-        if ($app) { return @{ Status="OK";    Details="Namespace accesible" } }
-        else       { return @{ Status="ERROR"; Details="Sin resultados en CCM_Application" } }
+        Invoke-Command -ComputerName $script:Target -ScriptBlock {
+            # 1. Servicio CCMExec
+            $svc = Get-Service "CcmExec" -ErrorAction SilentlyContinue
+            if (-not $svc) {
+                return @{ Status="ERROR"; Details="Servicio CcmExec no existe — cliente SCCM no instalado" }
+            }
+            if ($svc.Status -ne "Running") {
+                return @{ Status="ERROR"; Details="CcmExec esta '$($svc.Status)' (deberia ser Running)" }
+            }
+            # 2. Namespace root\ccm\ClientSDK
+            $ns = Get-CimInstance -Namespace "root\ccm" -ClassName "__NAMESPACE" `
+                                  -Filter "Name='ClientSDK'" -ErrorAction SilentlyContinue
+            if (-not $ns) {
+                return @{ Status="ERROR"; Details="CcmExec Running pero namespace root\ccm\ClientSDK no accesible (WMI danado?)" }
+            }
+            # 3. CCM_Application
+            $app = Get-CimInstance -Namespace "root\ccm\ClientSDK" -ClassName "CCM_Application" `
+                                   -ErrorAction SilentlyContinue | Select-Object -First 1
+            if ($app) {
+                $ver = (Get-CimInstance -Namespace "root\ccm" -ClassName "SMS_Client" `
+                                        -ErrorAction SilentlyContinue).ClientVersion
+                return @{ Status="OK"; Details="Namespace accesible | ClientVersion=$ver" }
+            }
+            return @{ Status="WARN"; Details="CcmExec Running y namespace OK, pero sin apps en CCM_Application (politica de equipo aun no aplicada)" }
+        }
     }
 
     Invoke-Step -Name "Cisco Secure Client" -ScriptBlock {
@@ -596,6 +616,21 @@ function Invoke-SoftwareCheck {
     Write-Info "Buscando '$appName' en '$ComputerName'..."
     Write-Sep
 
+    # Diagnóstico previo: servicio + namespace antes de buscar la app
+    $diag = Invoke-Command -ComputerName $ComputerName -ScriptBlock {
+        $svc = Get-Service "CcmExec" -ErrorAction SilentlyContinue
+        if (-not $svc)                        { return "ERROR: CcmExec no instalado" }
+        if ($svc.Status -ne "Running")        { return "ERROR: CcmExec $($svc.Status)" }
+        $ns = Get-CimInstance -Namespace "root\ccm" -ClassName "__NAMESPACE" `
+                              -Filter "Name='ClientSDK'" -ErrorAction SilentlyContinue
+        if (-not $ns)                         { return "ERROR: namespace root\ccm\ClientSDK inaccesible (WMI?)" }
+        return "OK"
+    }
+    if ($diag -ne "OK") {
+        Write-Fail "No se puede consultar el Centro de Software: $diag"
+        return
+    }
+
     $apps = Get-CimInstance -ComputerName $ComputerName -Namespace "root\ccm\ClientSDK" `
                             -ClassName "CCM_Application" -ErrorAction SilentlyContinue |
             Where-Object { $_.Name -like "*$appName*" }
@@ -610,6 +645,7 @@ function Invoke-SoftwareCheck {
     }
 
     Write-Warn "'$appName' no esta en el Centro de Software de '$ComputerName'."
+    Write-Info "  Posibles causas: app no desplegada a este equipo, politica SCCM no aplicada aun, o desplegada solo a usuario (no maquina)."
 
     if (-not (Confirm-Action "Forzar ciclos SCCM en '$ComputerName'?")) { return }
 
