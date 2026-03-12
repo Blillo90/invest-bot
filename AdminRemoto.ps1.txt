@@ -636,7 +636,7 @@ function Invoke-SoftwareCheck {
             Where-Object { $_.Name -like "*$appName*" }
 
     if ($apps) {
-        Write-Ok "Aplicacion(es) encontrada(s):"
+        Write-Ok "Aplicacion(es) encontrada(s) en Centro de Software:"
         foreach ($a in $apps) {
             Append-Output ("    > {0}  |  Estado: {1}  |  Version: {2}" -f $a.Name, $a.InstallState, $a.SoftwareVersion) `
                           ([System.Drawing.Color]::LightGreen)
@@ -644,8 +644,35 @@ function Invoke-SoftwareCheck {
         return
     }
 
-    Write-Warn "'$appName' no esta en el Centro de Software de '$ComputerName'."
+    Write-Warn "'$appName' no esta en el Centro de Software (CCM_Application)."
     Write-Info "  Posibles causas: app no desplegada a este equipo, politica SCCM no aplicada aun, o desplegada solo a usuario (no maquina)."
+
+    # Comprobacion adicional: buscar en registro de instalaciones locales
+    Write-Info "  Comprobando instalacion local en registro (Uninstall)..."
+    $localMatches = Invoke-Command -ComputerName $ComputerName -ArgumentList $appName -ScriptBlock {
+        param($name)
+        $paths = @(
+            "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*",
+            "HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*"
+        )
+        $found = @()
+        foreach ($p in $paths) {
+            $found += Get-ItemProperty $p -ErrorAction SilentlyContinue |
+                      Where-Object { $_.DisplayName -like "*$name*" } |
+                      Select-Object DisplayName, DisplayVersion, InstallDate, Publisher
+        }
+        return $found
+    }
+    if ($localMatches -and @($localMatches).Count -gt 0) {
+        Write-Ok "  Encontrado en registro local (instalado, no visible en SCCM):"
+        foreach ($m in @($localMatches)) {
+            Append-Output ("    > {0}  v{1}  |  Instalado: {2}  |  {3}" -f `
+                $m.DisplayName, $m.DisplayVersion, $m.InstallDate, $m.Publisher) `
+                ([System.Drawing.Color]::LightYellow)
+        }
+    } else {
+        Write-Warn "  Tampoco encontrado en registro local — no instalado en '$ComputerName'."
+    }
 
     if (-not (Confirm-Action "Forzar ciclos SCCM en '$ComputerName'?")) { return }
 
