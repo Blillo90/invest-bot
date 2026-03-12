@@ -452,9 +452,12 @@ RequestType   = PKCS10
 
     Show-Summary -ExcludeWarnStep "success.txt"
 
+    $hasErrors = [bool]($script:StepResults | Where-Object { $_.Status -eq "ERROR" })
+    if (-not $hasErrors) { return }   # Todo OK — no ofrecer tarea
+
     if ($script:Modo -eq "Divisional") {
         # ── Divisional: desplegar script auto-healing que solo actua si faltan certs ──
-        if (Confirm-Action "Instalar tarea de auto-reparacion de certificados en '$ComputerName'?`n(se ejecuta cada 15 min y solo actua — y registra — si faltan certs)") {
+        if (Confirm-Action "Hay errores en '$ComputerName'. Instalar tarea de auto-reparacion cada 15 min?`n(solo actua — y registra — si faltan certs)") {
 
             # Script que se desplegara en el equipo remoto
             $taskScript = @'
@@ -562,7 +565,7 @@ RequestType   = PKCS10
         }
     } else {
         # ── Nacional: comportamiento original (pide ruta de PS1 existente) ──
-        if (Confirm-Action "Instalar tarea programada en '$ComputerName' cada 15 min?") {
+        if (Confirm-Action "Hay errores en '$ComputerName'. Instalar tarea programada cada 15 min?") {
             $ps1Remote = Get-Input "Ruta del .ps1 EN el equipo remoto`n(ej: C:\Scripts\Master-Checker.ps1)" "Tarea programada"
             if (-not [string]::IsNullOrWhiteSpace($ps1Remote)) {
                 Invoke-Command -ComputerName $ComputerName -ArgumentList $script:TaskName, $ps1Remote -ScriptBlock {
