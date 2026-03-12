@@ -303,8 +303,8 @@ RequestType   = PKCS10
                                 if ($LASTEXITCODE -ne 0) {
                                     Remove-Item $infPath -Force -ErrorAction SilentlyContinue
                                     $steps += @{ Name="PASO 1: certreq -new (genera CSR)"; Status="ERROR"
-                                                 Details="ExitCode=$LASTEXITCODE: $($newOut -join ' ')" }
-                                    return @{ Status="ERROR"; Details="certreq -new fallo (ExitCode=$LASTEXITCODE)"; Steps=$steps }
+                                                 Details="ExitCode=$($LASTEXITCODE): $($newOut -join ' ')" }
+                                    return @{ Status="ERROR"; Details="certreq -new fallo (ExitCode=$($LASTEXITCODE))"; Steps=$steps }
                                 }
                                 $steps += @{ Name="PASO 1: certreq -new (genera CSR)"; Status="OK"; Details=$reqPath }
 
