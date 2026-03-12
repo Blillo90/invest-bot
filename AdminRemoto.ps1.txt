@@ -907,7 +907,7 @@ function New-FlatButton {
 # ── Panel superior ────────────────────────────────────────────────
 $topPanel           = New-Object System.Windows.Forms.Panel
 $topPanel.Dock      = "Top"
-$topPanel.Height    = 158
+$topPanel.Height    = 192
 $topPanel.BackColor = $bgPanel
 $form.Controls.Add($topPanel)
 
@@ -994,6 +994,7 @@ $btnUsb      = New-FlatButton "  Borrar Drivers USB"       410 120 155 30 $btnRe
 $btnInfo     = New-FlatButton "  Info del Sistema"         570 120 135 30 ([System.Drawing.Color]::FromArgb(40, 110, 60))
 $btnClear    = New-FlatButton "  Limpiar"                  710 120  80 30 $btnGray
 $btnCancel   = New-FlatButton "  Cancelar"                 795 120  90 30 ([System.Drawing.Color]::FromArgb(200,100,0))
+$btnRestart  = New-FlatButton "  Reiniciar Equipo"          10 157 180 28 ([System.Drawing.Color]::FromArgb(160, 80, 0))
 $btnCancel.Enabled = $false
 $topPanel.Controls.Add($btnMaster)
 $topPanel.Controls.Add($btnSoftware)
@@ -1001,6 +1002,7 @@ $topPanel.Controls.Add($btnUsb)
 $topPanel.Controls.Add($btnInfo)
 $topPanel.Controls.Add($btnClear)
 $topPanel.Controls.Add($btnCancel)
+$topPanel.Controls.Add($btnRestart)
 
 # ── Área de salida ────────────────────────────────────────────────
 $script:outputBox              = New-Object System.Windows.Forms.RichTextBox
@@ -1038,6 +1040,7 @@ function Set-ButtonsEnabled {
     $btnSoftware.Enabled = $enabled
     $btnUsb.Enabled      = $enabled
     $btnInfo.Enabled     = $enabled
+    $btnRestart.Enabled  = $enabled
     $btnPing.Enabled     = $enabled
     $btnCancel.Enabled   = -not $enabled
 }
@@ -1103,6 +1106,38 @@ $btnSoftware.Add_Click({
     Set-ButtonsEnabled $true
     Set-Status $(if ($script:cancelRequested) { "Cancelado" } else { "Finalizado" }) ([System.Drawing.Color]::$(if ($script:cancelRequested) { "Orange" } else { "LightGreen" }))
     $script:cancelRequested = $false
+})
+
+$btnRestart.Add_Click({
+    $target = $txtEquipo.Text.Trim()
+    if ([string]::IsNullOrEmpty($target)) { return }
+
+    $confirm = [System.Windows.Forms.MessageBox]::Show(
+        "ATENCION: Se va a reiniciar el equipo '$target'.`n`nTodas las sesiones y procesos activos se cerraran.`n`n¿Confirmas el reinicio?",
+        "Confirmar reinicio remoto",
+        [System.Windows.Forms.MessageBoxButtons]::YesNo,
+        [System.Windows.Forms.MessageBoxIcon]::Warning)
+
+    if ($confirm -ne [System.Windows.Forms.DialogResult]::Yes) {
+        Write-Warn "Reinicio cancelado por el usuario."
+        return
+    }
+
+    Set-ButtonsEnabled $false
+    Set-Status "Reiniciando '$target'..." ([System.Drawing.Color]::Orange)
+    Write-Sep
+    Write-Info "Reinicio remoto de '$target'..."
+    try {
+        Restart-Computer -ComputerName $target -Force -ErrorAction Stop
+        Write-Ok "Orden de reinicio enviada a '$target'. El equipo se reiniciara en breve."
+        Set-Status "Reinicio enviado a '$target'" ([System.Drawing.Color]::LightGreen)
+    } catch {
+        Write-Fail "No se pudo reiniciar '$target': $_"
+        Set-Status "Error al reiniciar" ([System.Drawing.Color]::Tomato)
+    }
+    Write-Sep
+    Append-Output "" $white
+    Set-ButtonsEnabled $true
 })
 
 $btnInfo.Add_Click({
