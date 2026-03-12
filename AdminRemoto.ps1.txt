@@ -25,6 +25,14 @@ Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
 Add-Type -AssemblyName Microsoft.VisualBasic
 
+# Ocultar la ventana de consola: esta es una herramienta GUI pura.
+# Todos los errores remotos se muestran ya en el area de salida de la GUI.
+Add-Type -Name ConsoleHelper -Namespace Win32 -MemberDefinition @'
+    [DllImport("kernel32.dll")] public static extern IntPtr GetConsoleWindow();
+    [DllImport("user32.dll")]   public static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
+'@
+[Win32.ConsoleHelper]::ShowWindow([Win32.ConsoleHelper]::GetConsoleWindow(), 0) | Out-Null
+
 $ErrorActionPreference = "Continue"
 
 # Los errores de conexion remota (AccessDenied, PSSessionStateBroken, etc.) se muestran
