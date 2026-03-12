@@ -31,10 +31,10 @@ KeyLength     = 2048
 Exportable    = FALSE
 RequestType   = PKCS10
 
-[RequestAttributes]
-CertificateTemplate = "AirbusAutoEnrolledClientAuthentication"
 "@ | Out-File $infPath -Encoding ASCII
 
+# La plantilla NO va en el INF — certreq -new la consultaria via CEP (sin red)
+# Se pasa como -attrib al certreq -submit directamente al CES
 $newOut = certreq -new -machine -q $infPath $reqPath 2>&1
 if ($LASTEXITCODE -ne 0) {
     Write-Host "  FALLO - certreq -new (ExitCode=$LASTEXITCODE)" -ForegroundColor Red
@@ -63,7 +63,7 @@ foreach ($url in $cesUrls) {
 
     $job = Start-Job -ScriptBlock {
         param($u, $rq, $cp)
-        certreq -submit -config $u -q -machine $rq $cp 2>&1
+        certreq -submit -config $u -attrib "CertificateTemplate:AirbusAutoEnrolledClientAuthentication" -q -machine $rq $cp 2>&1
     } -ArgumentList $url, $reqPath, $cerPath
 
     $null = Wait-Job $job -Timeout $cesTimeoutSec
