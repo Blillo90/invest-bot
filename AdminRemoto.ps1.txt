@@ -27,6 +27,12 @@ Add-Type -AssemblyName Microsoft.VisualBasic
 
 $ErrorActionPreference = "Continue"
 
+# Los errores de conexion remota (AccessDenied, PSSessionStateBroken, etc.) se muestran
+# en la GUI mediante try/catch. Suprimimos su salida al error stream de la consola para
+# que la ventana de PowerShell no se llene de mensajes rojos redundantes.
+$PSDefaultParameterValues['Invoke-Command:ErrorAction']  = 'SilentlyContinue'
+$PSDefaultParameterValues['Get-CimInstance:ErrorAction'] = 'SilentlyContinue'
+
 #region ═══════════════════════════════════════════════════════════
 # FUNCIONES DE SALIDA GUI
 #═══════════════════════════════════════════════════════════════════
