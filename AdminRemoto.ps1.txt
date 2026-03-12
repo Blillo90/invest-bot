@@ -698,6 +698,96 @@ function Invoke-SoftwareCheck {
 #endregion
 
 #region ═══════════════════════════════════════════════════════════
+# OPCIÓN 4 -INFORMACION DEL SISTEMA
+#═══════════════════════════════════════════════════════════════════
+
+function Invoke-SystemInfo {
+    param([Parameter(Mandatory)][string]$ComputerName)
+
+    Write-Info "Recopilando informacion del sistema '$ComputerName'..."
+    Write-Sep
+
+    $info = Invoke-Command -ComputerName $ComputerName -ScriptBlock {
+        $os      = Get-CimInstance Win32_OperatingSystem
+        $cs      = Get-CimInstance Win32_ComputerSystem
+        $bios    = Get-CimInstance Win32_BIOS
+        $cpu     = Get-CimInstance Win32_Processor | Select-Object -First 1
+        $nets    = Get-CimInstance Win32_NetworkAdapterConfiguration | Where-Object { $_.IPEnabled }
+        $disks   = Get-CimInstance Win32_LogicalDisk | Where-Object { $_.DriveType -eq 3 } |
+                       Select-Object DeviceID,
+                                     @{N="SizeGB"; E={[math]::Round($_.Size/1GB,1)}},
+                                     @{N="FreeGB"; E={[math]::Round($_.FreeSpace/1GB,1)}}
+        try   { $fqdn = [System.Net.Dns]::GetHostEntry($env:COMPUTERNAME).HostName }
+        catch { $fqdn = $env:COMPUTERNAME }
+
+        return @{
+            OSCaption   = $os.Caption
+            OSVersion   = $os.Version
+            OSBuild     = $os.BuildNumber
+            LastBoot    = $os.LastBootUpTime
+            FQDN        = $fqdn
+            Domain      = $cs.Domain
+            User        = $cs.UserName
+            CPU         = $cpu.Name
+            CPUCores    = $cpu.NumberOfLogicalProcessors
+            TotalRAMGB  = [math]::Round($os.TotalVisibleMemorySize / 1MB, 1)
+            FreeRAMGB   = [math]::Round($os.FreePhysicalMemory / 1MB, 1)
+            SerialBIOS  = $bios.SerialNumber
+            BIOSVersion = $bios.SMBIOSBIOSVersion
+            Networks    = @($nets | Select-Object Description, IPAddress, IPSubnet, DefaultIPGateway, MACAddress)
+            Disks       = @($disks)
+        }
+    }
+
+    $cyan   = [System.Drawing.Color]::FromArgb(0, 190, 255)
+    $yellow = [System.Drawing.Color]::LightYellow
+
+    Append-Output "  [SISTEMA OPERATIVO]" $cyan
+    Append-Output ("    SO:          {0}" -f $info.OSCaption) $white
+    Append-Output ("    Version:     {0}  (Build {1})" -f $info.OSVersion, $info.OSBuild) $white
+    Append-Output ("    Ultimo boot: {0}" -f $info.LastBoot.ToString("yyyy-MM-dd HH:mm")) $white
+    Append-Output ("    FQDN:        {0}" -f $info.FQDN) $white
+    Append-Output ("    Dominio:     {0}" -f $info.Domain) $white
+    Append-Output ("    Usuario:     {0}" -f $(if ($info.User) { $info.User } else { "(nadie logueado)" })) $white
+
+    Write-Sep
+    Append-Output "  [HARDWARE]" $cyan
+    Append-Output ("    CPU:         {0}" -f $info.CPU.Trim()) $white
+    Append-Output ("    Nucleos log: {0}" -f $info.CPUCores) $white
+    Append-Output ("    RAM total:   {0} GB   (libre: {1} GB)" -f $info.TotalRAMGB, $info.FreeRAMGB) $white
+    Append-Output ("    S/N BIOS:    {0}" -f $info.SerialBIOS) $white
+    Append-Output ("    BIOS ver:    {0}" -f $info.BIOSVersion) $white
+
+    Write-Sep
+    Append-Output "  [RED]" $cyan
+    foreach ($n in $info.Networks) {
+        $ips  = (@($n.IPAddress)         | Where-Object { $_ -notlike "*:*" }) -join ", "
+        $mask = (@($n.IPSubnet)          | Where-Object { $_ -notlike "*:*" }) -join ", "
+        $gw   = (@($n.DefaultIPGateway)) -join ", "
+        Append-Output ("    [{0}]" -f $n.Description) $yellow
+        Append-Output ("      IP / Mask: {0} / {1}" -f $ips, $mask) $white
+        Append-Output ("      Gateway:   {0}" -f $gw) $white
+        Append-Output ("      MAC:       {0}" -f $n.MACAddress) $white
+    }
+
+    Write-Sep
+    Append-Output "  [DISCOS]" $cyan
+    foreach ($d in $info.Disks) {
+        $used  = [math]::Round($d.SizeGB - $d.FreeGB, 1)
+        $pct   = if ($d.SizeGB -gt 0) { [math]::Round($used / $d.SizeGB * 100) } else { 0 }
+        $dcolor = if ($pct -gt 85) { [System.Drawing.Color]::Tomato } `
+                  elseif ($pct -gt 70) { [System.Drawing.Color]::Yellow } `
+                  else { [System.Drawing.Color]::LightGreen }
+        Append-Output ("    {0}  {1} / {2} GB usados  ({3}%)" -f $d.DeviceID, $used, $d.SizeGB, $pct) $dcolor
+    }
+
+    Write-Sep
+    Append-Output "" $white
+}
+
+#endregion
+
+#region ═══════════════════════════════════════════════════════════
 # OPCIÓN 3 -BORRAR DRIVERS USB
 #═══════════════════════════════════════════════════════════════════
 
@@ -884,15 +974,17 @@ $sep.BackColor  = [System.Drawing.Color]::FromArgb(70,70,70)
 $topPanel.Controls.Add($sep)
 
 # Botones de acción
-$btnMaster   = New-FlatButton "  Comprobar Masterizacion"  10 120 225 30 $accent
-$btnSoftware = New-FlatButton "  Comprobar Software SCCM" 240 120 225 30 $accent
-$btnUsb      = New-FlatButton "  Borrar Drivers USB"       470 120 185 30 $btnRed
-$btnClear    = New-FlatButton "  Limpiar"                  660 120  95 30 $btnGray
-$btnCancel   = New-FlatButton "  Cancelar"                 760 120 100 30 ([System.Drawing.Color]::FromArgb(200,100,0))
+$btnMaster   = New-FlatButton "  Comprobar Masterizacion"  10 120 195 30 $accent
+$btnSoftware = New-FlatButton "  Comprobar Software SCCM" 210 120 195 30 $accent
+$btnUsb      = New-FlatButton "  Borrar Drivers USB"       410 120 155 30 $btnRed
+$btnInfo     = New-FlatButton "  Info del Sistema"         570 120 135 30 ([System.Drawing.Color]::FromArgb(40, 110, 60))
+$btnClear    = New-FlatButton "  Limpiar"                  710 120  80 30 $btnGray
+$btnCancel   = New-FlatButton "  Cancelar"                 795 120  90 30 ([System.Drawing.Color]::FromArgb(200,100,0))
 $btnCancel.Enabled = $false
 $topPanel.Controls.Add($btnMaster)
 $topPanel.Controls.Add($btnSoftware)
 $topPanel.Controls.Add($btnUsb)
+$topPanel.Controls.Add($btnInfo)
 $topPanel.Controls.Add($btnClear)
 $topPanel.Controls.Add($btnCancel)
 
@@ -931,6 +1023,7 @@ function Set-ButtonsEnabled {
     $btnMaster.Enabled   = $enabled
     $btnSoftware.Enabled = $enabled
     $btnUsb.Enabled      = $enabled
+    $btnInfo.Enabled     = $enabled
     $btnPing.Enabled     = $enabled
     $btnCancel.Enabled   = -not $enabled
 }
@@ -998,6 +1091,19 @@ $btnSoftware.Add_Click({
     $script:cancelRequested = $false
 })
 
+$btnInfo.Add_Click({
+    $target = Get-ValidComputer
+    if (-not $target) { return }
+    $script:cancelRequested = $false
+    Set-ButtonsEnabled $false
+    Set-Status "Obteniendo informacion de '$target'..." ([System.Drawing.Color]::Yellow)
+    try   { Invoke-SystemInfo -ComputerName $target }
+    catch { Write-Fail "Error inesperado: $_" }
+    Set-ButtonsEnabled $true
+    Set-Status "Finalizado" ([System.Drawing.Color]::LightGreen)
+    $script:cancelRequested = $false
+})
+
 $btnUsb.Add_Click({
     $target = Get-ValidComputer
     if (-not $target) { return }
@@ -1036,6 +1142,7 @@ $form.Add_Shown({
     Append-Output "  > Introduce el nombre del equipo en el campo superior." $silver
     Append-Output "  > Usa 'Ping' para verificar conectividad antes de operar." $silver
     Append-Output "  > Los botones de accion se bloquean mientras hay una tarea en curso." $silver
+    Append-Output "  > 'Info del Sistema' muestra SO, IP, MAC, CPU, RAM, discos y mas." $silver
     Write-Sep
     Append-Output "" $white
 })
