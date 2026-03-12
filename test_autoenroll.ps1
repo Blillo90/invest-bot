@@ -63,7 +63,7 @@ foreach ($url in $cesUrls) {
 
     $job = Start-Job -ScriptBlock {
         param($u, $rq, $cp)
-        certreq -submit -config $u -attrib "CertificateTemplate:AirbusAutoEnrolledClientAuthentication" -q -machine $rq $cp 2>&1
+        certreq -submit -config $u -attrib "CertificateTemplate:AirbusAutoEnrolledClientAuthentication" -q -AdminForceMachine $rq $cp 2>&1
     } -ArgumentList $url, $reqPath, $cerPath
 
     $null = Wait-Job $job -Timeout $cesTimeoutSec
