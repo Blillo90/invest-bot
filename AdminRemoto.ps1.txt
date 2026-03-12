@@ -211,24 +211,39 @@ function Invoke-MasterCheck {
             $result = Invoke-Command -ComputerName $script:Target -ScriptBlock {
                 $all  = Get-ChildItem "Cert:\LocalMachine\My" -ErrorAction SilentlyContinue
                 $now  = Get-Date
-                $details = @(); $missing = @()
+                $details = @(); $missing = @(); $cleaned = @()
 
-                # Cert Breguet G1
-                $cBreguet = $all | Where-Object { $_.Issuer -like "*Breguet G1*" -and $_.NotAfter -gt $now } |
-                                   Sort-Object NotAfter -Descending | Select-Object -First 1
-                if (-not $cBreguet) { $missing += "Breguet G1" }
-                else { $details += "Breguet G1: Expira=$($cBreguet.NotAfter.ToString('dd/MM/yyyy'))" }
+                foreach ($caEntry in @(
+                    @{ Name="Breguet G1";  Filter="*Breguet*" },
+                    @{ Name="da Vinci G1"; Filter="*Vinci*"   }
+                )) {
+                    $certs = @($all | Where-Object { $_.Issuer -like $caEntry.Filter -and $_.NotAfter -gt $now } |
+                               Sort-Object NotAfter -Descending)
 
-                # Cert da Vinci G1
-                $cVinci = $all | Where-Object { $_.Issuer -like "*da Vinci G1*" -and $_.NotAfter -gt $now } |
-                                 Sort-Object NotAfter -Descending | Select-Object -First 1
-                if (-not $cVinci) { $missing += "da Vinci G1" }
-                else { $details += "da Vinci G1: Expira=$($cVinci.NotAfter.ToString('dd/MM/yyyy'))" }
-
-                if ($missing.Count -gt 0) {
-                    return @{ Status="ERROR"; Details="FALTA: $($missing -join ', ')  |  $($details -join ' | ')"; Missing=$missing }
+                    if ($certs.Count -eq 0) {
+                        $missing += $caEntry.Name
+                    } else {
+                        if ($certs.Count -gt 1) {
+                            # Borrar duplicados — conservar solo el mas reciente
+                            $certs | Select-Object -Skip 1 | ForEach-Object {
+                                Remove-Item "Cert:\LocalMachine\My\$($_.Thumbprint)" -Force -ErrorAction SilentlyContinue
+                            }
+                            $cleaned += "$($caEntry.Name): $($certs.Count - 1) duplicado(s) borrado(s), se conserva el mas reciente"
+                        }
+                        $details += "$($caEntry.Name): Expira=$($certs[0].NotAfter.ToString('dd/MM/yyyy'))"
+                    }
                 }
-                return @{ Status="OK"; Details=($details -join " | ") }
+
+                $allDetails = $cleaned + $details
+                if ($missing.Count -gt 0) {
+                    return @{ Status="ERROR"; Details="FALTA: $($missing -join ', ')  |  $($allDetails -join ' | ')"; Missing=$missing; Cleaned=$cleaned }
+                }
+                return @{ Status="OK"; Details=($allDetails -join " | "); Cleaned=$cleaned }
+            }
+
+            # Informar si se borraron duplicados
+            foreach ($c in @($result.Cleaned)) {
+                if ($c) { Write-Warn "  $c" }
             }
 
             # Si falta algún cert, ofrecer inscripción directa via CES Kerberos
@@ -253,18 +268,20 @@ function Invoke-MasterCheck {
                         $target = $script:Target
                         $ct     = $certType
                         Invoke-Step -Name "Inscribir $ct via certreq+CES" -ScriptBlock {
-                            Invoke-Command -ComputerName $target -ArgumentList $urls,$ct -ScriptBlock {
+                            $remoteResult = Invoke-Command -ComputerName $target -ArgumentList $urls,$ct -ScriptBlock {
                                 param($cesUrls, $certType)
                                 # certreq es la unica forma de evitar LoadPolicy (CEP):
                                 #   1. certreq -new  → genera CSR localmente (sin red)
                                 #   2. certreq -submit -config <CES_URL> → envia directamente al CES
                                 #   3. certreq -accept → instala el cert en LocalMachine\My
                                 # Ningun paso contacta el servidor de directiva (CEP).
-                                $rand    = Get-Random -Maximum 99999
-                                $base    = "$env:TEMP\AirbusEnroll_$rand"
-                                $infPath = "$base.inf"
-                                $reqPath = "$base.req"
-                                $cerPath = "$base.cer"
+                                $steps       = @()
+                                $cesTimeout  = 20
+                                $rand        = Get-Random -Maximum 99999
+                                $base        = "$env:TEMP\AirbusEnroll_$rand"
+                                $infPath     = "$base.inf"
+                                $reqPath     = "$base.req"
+                                $cerPath     = "$base.cer"
 
                                 # INF minimo — sujeto lo rellena la CA desde AD (template Build-from-AD)
                                 @"
@@ -281,46 +298,73 @@ RequestType   = PKCS10
 
 "@ | Out-File $infPath -Encoding ASCII
 
-                                # Generar CSR — plantilla NO en INF (evita consulta CEP)
+                                # ── PASO 1: certreq -new ────────────────────────────────────
                                 $newOut = certreq -new -machine -q $infPath $reqPath 2>&1
                                 if ($LASTEXITCODE -ne 0) {
                                     Remove-Item $infPath -Force -ErrorAction SilentlyContinue
-                                    return @{ Status="ERROR"; Details="certreq -new fallo (ExitCode=$LASTEXITCODE): $($newOut -join ' ')" }
+                                    $steps += @{ Name="PASO 1: certreq -new (genera CSR)"; Status="ERROR"
+                                                 Details="ExitCode=$LASTEXITCODE: $($newOut -join ' ')" }
+                                    return @{ Status="ERROR"; Details="certreq -new fallo (ExitCode=$LASTEXITCODE)"; Steps=$steps }
                                 }
+                                $steps += @{ Name="PASO 1: certreq -new (genera CSR)"; Status="OK"; Details=$reqPath }
 
-                                # Intentar cada servidor CES directamente (timeout 20s por intento)
-                                $lastErr = ""
-                                $cesTimeoutSec = 20
+                                # ── PASO 2: certreq -submit a cada CES (timeout 20s) ────────
+                                $lastErr = ""; $submitOk = $false; $usedUrl = ""
                                 foreach ($url in $cesUrls) {
                                     $job = Start-Job -ScriptBlock {
                                         param($u,$rq,$cp)
                                         certreq -submit -config $u -attrib "CertificateTemplate:Airbusauto-enrolledclientauthentication" -q -AdminForceMachine -Kerberos $rq $cp 2>&1
                                     } -ArgumentList $url,$reqPath,$cerPath
-                                    $null = Wait-Job $job -Timeout $cesTimeoutSec
+                                    $null = Wait-Job $job -Timeout $cesTimeout
                                     if ($job.State -eq 'Running') {
                                         Stop-Job $job; Remove-Job $job -Force
-                                        $lastErr = "$url TIMEOUT (>${cesTimeoutSec}s)"
                                         Remove-Item $cerPath -Force -ErrorAction SilentlyContinue
+                                        $lastErr = "$url TIMEOUT (>${cesTimeout}s)"
                                         continue
                                     }
                                     $submitOut = Receive-Job $job
                                     if ($job.ChildJobs[0].Error.Count -gt 0) { $submitExit = 1 } else { $submitExit = 0 }
                                     Remove-Job $job -Force
                                     if ($submitExit -eq 0 -and (Test-Path $cerPath)) {
-                                        $acceptOut = certreq -accept -machine $cerPath 2>&1
-                                        Remove-Item $infPath,$reqPath,$cerPath -Force -ErrorAction SilentlyContinue
-                                        if ($LASTEXITCODE -eq 0) {
-                                            return @{ Status="OK"; Details="Certificado inscrito OK via $url" }
-                                        }
-                                        return @{ Status="WARN"; Details="Emitido pero accept fallo: $($acceptOut -join ' ') | via $url" }
+                                        $submitOk = $true; $usedUrl = $url
+                                        $steps += @{ Name="PASO 2: certreq -submit"; Status="OK"
+                                                     Details="$($submitOut -join ' ') | via $url" }
+                                        break
                                     }
-                                    $lastErr = "$url ExitCode=$($submitExit): $($submitOut -join ' ')"
+                                    $lastErr = "$url ExitCode=$submitExit : $($submitOut -join ' ')"
                                     Remove-Item $cerPath -Force -ErrorAction SilentlyContinue
                                 }
 
-                                Remove-Item $infPath,$reqPath -Force -ErrorAction SilentlyContinue
-                                return @{ Status="ERROR"; Details="certreq -submit fallo en todos los CES. Ultimo: $lastErr" }
+                                if (-not $submitOk) {
+                                    Remove-Item $infPath,$reqPath -Force -ErrorAction SilentlyContinue
+                                    $steps += @{ Name="PASO 2: certreq -submit"; Status="ERROR"
+                                                 Details="Todos los CES fallaron. Ultimo: $lastErr" }
+                                    return @{ Status="ERROR"; Details="certreq -submit fallo en todos los CES"; Steps=$steps }
+                                }
+
+                                # ── PASO 3: certreq -accept ──────────────────────────────────
+                                $acceptOut = certreq -accept -machine $cerPath 2>&1
+                                Remove-Item $infPath,$reqPath,$cerPath -Force -ErrorAction SilentlyContinue
+                                if ($LASTEXITCODE -eq 0) {
+                                    $steps += @{ Name="PASO 3: certreq -accept (instala cert)"; Status="OK"
+                                                 Details="Instalado en LocalMachine\My" }
+                                    return @{ Status="OK"; Details="$certType inscrito OK via $usedUrl"; Steps=$steps }
+                                }
+                                $steps += @{ Name="PASO 3: certreq -accept (instala cert)"; Status="WARN"
+                                             Details="$($acceptOut -join ' ')" }
+                                return @{ Status="WARN"; Details="Emitido pero accept fallo: $($acceptOut -join ' ')"; Steps=$steps }
                             }
+
+                            # Mostrar pasos individuales en la GUI
+                            foreach ($s in @($remoteResult.Steps)) {
+                                if (-not $s) { continue }
+                                switch ($s.Status) {
+                                    "OK"    { Write-Ok   "  $($s.Name)  ->  $($s.Details)" }
+                                    "WARN"  { Write-Warn "  $($s.Name)  ->  $($s.Details)" }
+                                    "ERROR" { Write-Fail "  $($s.Name)  ->  $($s.Details)" }
+                                }
+                            }
+                            return $remoteResult
                         }
                     }
                 }
