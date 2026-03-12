@@ -1,7 +1,7 @@
 #Requires -Version 5.1
 <#
 .SYNOPSIS
-    Herramienta de administración remota unificada — v3.0 (GUI)
+    Herramienta de administración remota unificada -v3.0 (GUI)
 .DESCRIPTION
     Interfaz gráfica con tres opciones de administración remota:
       1. Comprobar Masterización de un equipo
@@ -186,7 +186,7 @@ $script:SccmCyclesBlock = {
 #endregion
 
 #region ═══════════════════════════════════════════════════════════
-# OPCIÓN 1 — COMPROBAR MASTERIZACIÓN
+# OPCIÓN 1 -COMPROBAR MASTERIZACIÓN
 #═══════════════════════════════════════════════════════════════════
 
 function Invoke-MasterCheck {
@@ -224,7 +224,7 @@ function Invoke-MasterCheck {
                         $missing += $caEntry.Name
                     } else {
                         if ($certs.Count -gt 1) {
-                            # Borrar duplicados — conservar solo el mas reciente
+                            # Borrar duplicados -conservar solo el mas reciente
                             $certs | Select-Object -Skip 1 | ForEach-Object {
                                 Remove-Item "Cert:\LocalMachine\My\$($_.Thumbprint)" -Force -ErrorAction SilentlyContinue
                             }
@@ -284,7 +284,7 @@ function Invoke-MasterCheck {
                                 $reqPath     = "$base.req"
                                 $cerPath     = "$base.cer"
 
-                                # INF minimo — sujeto lo rellena la CA desde AD (template Build-from-AD)
+                                # INF minimo -sujeto lo rellena la CA desde AD (template Build-from-AD)
                                 @"
 [Version]
 Signature="`$Windows NT`$"
@@ -417,7 +417,7 @@ RequestType   = PKCS10
             # 1. Servicio CCMExec
             $svc = Get-Service "CcmExec" -ErrorAction SilentlyContinue
             if (-not $svc) {
-                return @{ Status="ERROR"; Details="Servicio CcmExec no existe — cliente SCCM no instalado" }
+                return @{ Status="ERROR"; Details="Servicio CcmExec no existe -cliente SCCM no instalado" }
             }
             if ($svc.Status -ne "Running") {
                 return @{ Status="ERROR"; Details="CcmExec esta '$($svc.Status)' (deberia ser Running)" }
@@ -473,15 +473,15 @@ RequestType   = PKCS10
     Show-Summary -ExcludeWarnStep "success.txt"
 
     $hasErrors = [bool]($script:StepResults | Where-Object { $_.Status -eq "ERROR" })
-    if (-not $hasErrors) { return }   # Todo OK — no ofrecer tarea
+    if (-not $hasErrors) { return }   # Todo OK -no ofrecer tarea
 
     if ($script:Modo -eq "Divisional") {
         # ── Divisional: desplegar script auto-healing que solo actua si faltan certs ──
-        if (Confirm-Action "Hay errores en '$ComputerName'. Instalar tarea de auto-reparacion cada 15 min?`n(solo actua — y registra — si faltan certs)") {
+        if (Confirm-Action "Hay errores en '$ComputerName'. Instalar tarea de auto-reparacion cada 15 min?`n(solo actua -y registra -si faltan certs)") {
 
             # Script que se desplegara en el equipo remoto
             $taskScript = @'
-# AirbusAutoEnroll_Task.ps1 — ejecutado por Tarea Programada como SYSTEM
+# AirbusAutoEnroll_Task.ps1 -ejecutado por Tarea Programada como SYSTEM
 # Solo actua (y escribe en log) cuando faltan certificados. Si todo OK, sale silenciosamente.
 $logFile = "C:\Windows\Temp\AirbusAutoEnroll.log"
 $now     = Get-Date
@@ -496,7 +496,7 @@ foreach ($caEntry in @(
     if ($valid.Count -eq 0) { $missing += $caEntry.Name }
 }
 
-# Todo OK — salir sin escribir nada
+# Todo OK -salir sin escribir nada
 if ($missing.Count -eq 0) { exit 0 }
 
 "[$($now.ToString('dd/MM/yyyy HH:mm:ss'))] FALTAN certs: $($missing -join ', ')" | Add-Content $logFile
@@ -603,7 +603,7 @@ RequestType   = PKCS10
 #endregion
 
 #region ═══════════════════════════════════════════════════════════
-# OPCIÓN 2 — COMPROBAR SOFTWARE EN CENTRO DE SOFTWARE
+# OPCIÓN 2 -COMPROBAR SOFTWARE EN CENTRO DE SOFTWARE
 #═══════════════════════════════════════════════════════════════════
 
 function Invoke-SoftwareCheck {
@@ -671,7 +671,7 @@ function Invoke-SoftwareCheck {
                 ([System.Drawing.Color]::LightYellow)
         }
     } else {
-        Write-Warn "  Tampoco encontrado en registro local — no instalado en '$ComputerName'."
+        Write-Warn "  Tampoco encontrado en registro local -no instalado en '$ComputerName'."
     }
 
     if (-not (Confirm-Action "Forzar ciclos SCCM en '$ComputerName'?")) { return }
@@ -698,7 +698,7 @@ function Invoke-SoftwareCheck {
 #endregion
 
 #region ═══════════════════════════════════════════════════════════
-# OPCIÓN 3 — BORRAR DRIVERS USB
+# OPCIÓN 3 -BORRAR DRIVERS USB
 #═══════════════════════════════════════════════════════════════════
 
 function Invoke-UsbDriverClean {
