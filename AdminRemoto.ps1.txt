@@ -18,7 +18,9 @@
 [CmdletBinding()]
 param(
     [string]$ExpectedIssuerLike = "*Airbus Issuing CA Juan de la Cierva*",
-    [string]$TaskName           = "MasterizacionCheck_15min"
+    [string]$TaskName           = "MasterizacionCheck_15min",
+    [string]$SCCMServer         = "",   # Servidor SCCM para busqueda por S/N (ej: sccmsrv01.corp)
+    [string]$SiteCode           = ""    # Codigo de sitio SCCM (ej: P01)
 )
 
 Add-Type -AssemblyName System.Windows.Forms
@@ -853,6 +855,8 @@ function Invoke-UsbDriverClean {
 #═══════════════════════════════════════════════════════════════════
 
 $script:ExpectedIssuerLike = $ExpectedIssuerLike
+$script:SCCMServer         = $SCCMServer
+$script:SiteCode           = $SiteCode
 
 # ── Colores y fuentes ────────────────────────────────────────────
 $bgDark      = [System.Drawing.Color]::FromArgb(28,  28,  28)
@@ -948,8 +952,11 @@ $txtEquipo.Font         = $fontUI
 $topPanel.Controls.Add($txtEquipo)
 
 # Botón Ping
-$btnPing = New-FlatButton "Ping" 340 57 60 30 $btnGray
+$btnPing = New-FlatButton "Ping"  340 57 60 30 $btnGray
+# Botón buscar por número de serie
+$btnSN   = New-FlatButton "S/N"   406 57 65 30 ([System.Drawing.Color]::FromArgb(70, 70, 110))
 $topPanel.Controls.Add($btnPing)
+$topPanel.Controls.Add($btnSN)
 
 # Fila 2: selector de modo Nacional / Divisional
 $lblModo            = New-Object System.Windows.Forms.Label
@@ -1041,6 +1048,7 @@ function Set-ButtonsEnabled {
     $btnUsb.Enabled      = $enabled
     $btnInfo.Enabled     = $enabled
     $btnRestart.Enabled  = $enabled
+    $btnSN.Enabled       = $enabled
     $btnPing.Enabled     = $enabled
     $btnCancel.Enabled   = -not $enabled
 }
@@ -1066,6 +1074,53 @@ function Get-ValidComputer {
 }
 
 # ── Eventos ───────────────────────────────────────────────────────
+$btnSN.Add_Click({
+    # Asegurar que tenemos servidor SCCM y site code configurados
+    if ([string]::IsNullOrEmpty($script:SCCMServer)) {
+        $script:SCCMServer = Get-Input "Nombre o IP del servidor SCCM`n(ej: sccmsrv01.empresa.corp)" "Buscar por numero de serie"
+        if ([string]::IsNullOrEmpty($script:SCCMServer)) { return }
+    }
+    if ([string]::IsNullOrEmpty($script:SiteCode)) {
+        $script:SiteCode = Get-Input "Codigo de sitio SCCM (3 caracteres, ej: P01)" "Buscar por numero de serie"
+        if ([string]::IsNullOrEmpty($script:SiteCode)) { return }
+    }
+
+    $serial = Get-Input "Introduce el numero de serie del equipo" "Buscar equipo por S/N"
+    if ([string]::IsNullOrEmpty($serial)) { return }
+
+    $serial = $serial.Trim().ToUpper()
+    Set-Status "Buscando S/N '$serial' en SCCM..." ([System.Drawing.Color]::Yellow)
+    Write-Sep
+    Write-Info "Buscando equipo con S/N '$serial' en SCCM ($($script:SCCMServer))..."
+
+    try {
+        $ns     = "root\sms\site_$($script:SiteCode)"
+        $wql    = "SELECT sys.Name FROM SMS_R_System sys " +
+                  "JOIN SMS_G_System_PC_BIOS bios ON bios.ResourceID = sys.ResourceID " +
+                  "WHERE bios.SerialNumber = '$serial'"
+        $result = Get-CimInstance -ComputerName $script:SCCMServer -Namespace $ns `
+                                  -Query $wql -ErrorAction Stop | Select-Object -First 1
+
+        if ($result -and $result.Name) {
+            $txtEquipo.Text = $result.Name
+            Write-Ok "S/N '$serial' encontrado -> equipo: $($result.Name)"
+            Set-Status "Equipo encontrado: $($result.Name)" ([System.Drawing.Color]::LightGreen)
+        } else {
+            Write-Warn "No se encontro ningun equipo con S/N '$serial' en SCCM."
+            Write-Info "  Posibles causas: inventario no recibido aun, equipo nuevo, o S/N incorrecto."
+            Set-Status "S/N no encontrado en SCCM" ([System.Drawing.Color]::Yellow)
+        }
+    } catch {
+        Write-Fail "Error al consultar SCCM: $_"
+        Write-Info "  Verifica que el servidor '$($script:SCCMServer)' es correcto y tienes permisos de lectura en el namespace SMS."
+        # Resetear para que el usuario pueda corregir en el siguiente intento
+        $script:SCCMServer = ""
+        $script:SiteCode   = ""
+        Set-Status "Error consultando SCCM" ([System.Drawing.Color]::Tomato)
+    }
+    Append-Output "" $white
+})
+
 $btnPing.Add_Click({
     $computer = $txtEquipo.Text.Trim()
     if ([string]::IsNullOrEmpty($computer)) { return }
