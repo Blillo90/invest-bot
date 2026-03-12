@@ -294,7 +294,7 @@ RequestType   = PKCS10
                                 foreach ($url in $cesUrls) {
                                     $job = Start-Job -ScriptBlock {
                                         param($u,$rq,$cp)
-                                        certreq -submit -config $u -attrib "CertificateTemplate:AirbusAutoEnrolledClientAuthentication" -q -AdminForceMachine -Kerberos $rq $cp 2>&1
+                                        certreq -submit -config $u -attrib "CertificateTemplate:Airbusauto-enrolledclientauthentication" -q -AdminForceMachine -Kerberos $rq $cp 2>&1
                                     } -ArgumentList $url,$reqPath,$cerPath
                                     $null = Wait-Job $job -Timeout $cesTimeoutSec
                                     if ($job.State -eq 'Running') {
