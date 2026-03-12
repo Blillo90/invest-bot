@@ -263,6 +263,7 @@ function Invoke-MasterCheck {
                             "https://aefews02.autoenroll.pki.intra.corp/Airbus%20Issuing%20CA%20da%20Vinci%20G1_CES_Kerberos/service.svc/CES"
                         )
                     }
+                    $enrollStepPrefix = "Inscribir"
                     foreach ($certType in $missingCerts) {
                         $urls   = $cesMap[$certType]
                         $target = $script:Target
@@ -366,6 +367,13 @@ RequestType   = PKCS10
                             }
                             return $remoteResult
                         }
+                    }
+
+                    # Si todos los certs faltantes se inscribieron OK -> marcar como Corregido
+                    $okEnrolled = @($script:StepResults |
+                        Where-Object { $_.Step -like "$enrollStepPrefix * via certreq+CES" -and $_.Status -eq "OK" })
+                    if ($okEnrolled.Count -eq $missingCerts.Count) {
+                        return @{ Status="WARN"; Details="Corregido: $($missingCerts -join ', ') inscrito(s) OK | $($result.Details)" }
                     }
                 }
             }
