@@ -35,7 +35,7 @@ RequestType   = PKCS10
 CertificateTemplate = "AirbusAutoEnrolledClientAuthentication"
 "@ | Out-File $infPath -Encoding ASCII
 
-$newOut = certreq -new -MachineStore -q $infPath $reqPath 2>&1
+$newOut = certreq -new -machine -q $infPath $reqPath 2>&1
 if ($LASTEXITCODE -ne 0) {
     Write-Host "  FALLO - certreq -new (ExitCode=$LASTEXITCODE)" -ForegroundColor Red
     Write-Host "  $($newOut -join "`n  ")"
@@ -63,7 +63,7 @@ foreach ($url in $cesUrls) {
 
     $job = Start-Job -ScriptBlock {
         param($u, $rq, $cp)
-        certreq -submit -config $u -q -MachineStore $rq $cp 2>&1
+        certreq -submit -config $u -q -machine $rq $cp 2>&1
     } -ArgumentList $url, $reqPath, $cerPath
 
     $null = Wait-Job $job -Timeout $cesTimeoutSec
