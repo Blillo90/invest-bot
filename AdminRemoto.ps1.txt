@@ -780,6 +780,16 @@ function Invoke-SystemInfo {
         try   { $fqdn = [System.Net.Dns]::GetHostEntry($env:COMPUTERNAME).HostName }
         catch { $fqdn = $env:COMPUTERNAME }
 
+        $sccmMP   = $null; $sccmSite = $null; $sccmVer = $null
+        try {
+            $sccmAuth = Get-WmiObject -Namespace root\ccm -Class SMS_Authority -ErrorAction Stop |
+                            Select-Object -First 1
+            $sccmMP   = $sccmAuth.CurrentManagementPoint
+            $sccmReg  = Get-ItemProperty "HKLM:\SOFTWARE\Microsoft\SMS\Mobile Client" -ErrorAction SilentlyContinue
+            $sccmSite = $sccmReg.AssignedSiteCode
+            $sccmVer  = $sccmReg.ProductVersion
+        } catch { }
+
         return @{
             OSCaption   = $os.Caption
             OSVersion   = $os.Version
@@ -796,6 +806,9 @@ function Invoke-SystemInfo {
             BIOSVersion = $bios.SMBIOSBIOSVersion
             Networks    = @($nets | Select-Object Description, IPAddress, IPSubnet, DefaultIPGateway, MACAddress)
             Disks       = @($disks)
+            SccmMP      = $sccmMP
+            SccmSite    = $sccmSite
+            SccmVer     = $sccmVer
         }
     }
 
@@ -839,6 +852,16 @@ function Invoke-SystemInfo {
                   elseif ($pct -gt 70) { [System.Drawing.Color]::Yellow } `
                   else { [System.Drawing.Color]::LightGreen }
         Append-Output ("    {0}  {1} / {2} GB usados  ({3}%)" -f $d.DeviceID, $used, $d.SizeGB, $pct) $dcolor
+    }
+
+    Write-Sep
+    Append-Output "  [SCCM CLIENT]" $cyan
+    if ($info.SccmMP) {
+        Append-Output ("    Mgmt Point:  {0}" -f $info.SccmMP)   ([System.Drawing.Color]::LightGreen)
+        Append-Output ("    Site Code:   {0}" -f $(if ($info.SccmSite) { $info.SccmSite } else { "(desconocido)" })) $white
+        Append-Output ("    Version:     {0}" -f $(if ($info.SccmVer)  { $info.SccmVer  } else { "(desconocida)"  })) $white
+    } else {
+        Append-Output "    Cliente SCCM no encontrado o no responde (root\ccm inaccesible)" ([System.Drawing.Color]::Gray)
     }
 
     Write-Sep
