@@ -1001,7 +1001,9 @@ $btnUsb      = New-FlatButton "  Borrar Drivers USB"       410 120 155 30 $btnRe
 $btnInfo     = New-FlatButton "  Info del Sistema"         570 120 135 30 ([System.Drawing.Color]::FromArgb(40, 110, 60))
 $btnClear    = New-FlatButton "  Limpiar"                  710 120  80 30 $btnGray
 $btnCancel   = New-FlatButton "  Cancelar"                 795 120  90 30 ([System.Drawing.Color]::FromArgb(200,100,0))
-$btnRestart  = New-FlatButton "  Reiniciar Equipo"          10 157 180 28 ([System.Drawing.Color]::FromArgb(160, 80, 0))
+$btnRestart      = New-FlatButton "  Reiniciar Equipo"          10 157 180 28 ([System.Drawing.Color]::FromArgb(160, 80, 0))
+$btnGPUpdate     = New-FlatButton "  GPUpdate /force"           200 157 165 28 ([System.Drawing.Color]::FromArgb(0, 100, 140))
+$btnPolicyCycles = New-FlatButton "  Ciclos de Politicas"       375 157 185 28 ([System.Drawing.Color]::FromArgb(60, 80, 130))
 $btnCancel.Enabled = $false
 $topPanel.Controls.Add($btnMaster)
 $topPanel.Controls.Add($btnSoftware)
@@ -1010,6 +1012,8 @@ $topPanel.Controls.Add($btnInfo)
 $topPanel.Controls.Add($btnClear)
 $topPanel.Controls.Add($btnCancel)
 $topPanel.Controls.Add($btnRestart)
+$topPanel.Controls.Add($btnGPUpdate)
+$topPanel.Controls.Add($btnPolicyCycles)
 
 # ── Área de salida ────────────────────────────────────────────────
 $script:outputBox              = New-Object System.Windows.Forms.RichTextBox
@@ -1047,9 +1051,11 @@ function Set-ButtonsEnabled {
     $btnSoftware.Enabled = $enabled
     $btnUsb.Enabled      = $enabled
     $btnInfo.Enabled     = $enabled
-    $btnRestart.Enabled  = $enabled
-    $btnSN.Enabled       = $enabled
-    $btnPing.Enabled     = $enabled
+    $btnRestart.Enabled      = $enabled
+    $btnGPUpdate.Enabled     = $enabled
+    $btnPolicyCycles.Enabled = $enabled
+    $btnSN.Enabled           = $enabled
+    $btnPing.Enabled         = $enabled
     $btnCancel.Enabled   = -not $enabled
 }
 
@@ -1189,6 +1195,60 @@ $btnRestart.Add_Click({
     } catch {
         Write-Fail "No se pudo reiniciar '$target': $_"
         Set-Status "Error al reiniciar" ([System.Drawing.Color]::Tomato)
+    }
+    Write-Sep
+    Append-Output "" $white
+    Set-ButtonsEnabled $true
+})
+
+$btnGPUpdate.Add_Click({
+    $target = Get-ValidComputer
+    if (-not $target) { return }
+    Set-ButtonsEnabled $false
+    Set-Status "Ejecutando gpupdate /force en '$target'..." ([System.Drawing.Color]::Yellow)
+    Write-Sep
+    Write-Info "gpupdate /force en '$target'..."
+    try {
+        $ec = Invoke-Command -ComputerName $target -ScriptBlock {
+            (Start-Process gpupdate.exe -ArgumentList "/force /wait:0" -Wait -PassThru).ExitCode
+        }
+        if ($ec -eq 0) {
+            Write-Ok "gpupdate completado correctamente (ExitCode=0)."
+            Set-Status "GPUpdate OK en '$target'" ([System.Drawing.Color]::LightGreen)
+        } else {
+            Write-Warn "gpupdate finalizo con ExitCode=$ec."
+            Set-Status "GPUpdate WARN (ExitCode=$ec)" ([System.Drawing.Color]::Yellow)
+        }
+    } catch {
+        Write-Fail "Error ejecutando gpupdate en '$target': $_"
+        Set-Status "Error en gpupdate" ([System.Drawing.Color]::Tomato)
+    }
+    Write-Sep
+    Append-Output "" $white
+    Set-ButtonsEnabled $true
+})
+
+$btnPolicyCycles.Add_Click({
+    $target = Get-ValidComputer
+    if (-not $target) { return }
+    Set-ButtonsEnabled $false
+    Set-Status "Lanzando ciclos SCCM en '$target'..." ([System.Drawing.Color]::Yellow)
+    Write-Sep
+    Write-Info "Ciclos de politicas SCCM en '$target'..."
+    try {
+        $result = Invoke-Command -ComputerName $target -ScriptBlock $script:SccmCyclesBlock
+        switch ($result.Status) {
+            "OK"    { Write-Ok   "Ciclos completados: $($result.Details)"
+                      Set-Status "Ciclos SCCM OK en '$target'" ([System.Drawing.Color]::LightGreen) }
+            "WARN"  { Write-Warn "Ciclos con avisos: $($result.Details)"
+                      Set-Status "Ciclos SCCM con avisos en '$target'" ([System.Drawing.Color]::Yellow) }
+            "ERROR" { Write-Fail "Ciclos con errores: $($result.Details)"
+                      Set-Status "Error en ciclos SCCM" ([System.Drawing.Color]::Tomato) }
+        }
+    } catch {
+        Write-Fail "Error al lanzar ciclos SCCM en '$target': $_"
+        Write-Info "  Verifica que el cliente SCCM esta instalado y activo en el equipo."
+        Set-Status "Error en ciclos SCCM" ([System.Drawing.Color]::Tomato)
     }
     Write-Sep
     Append-Output "" $white
