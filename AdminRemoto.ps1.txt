@@ -883,6 +883,108 @@ function Invoke-UsbDriverClean {
 #endregion
 
 #region ═══════════════════════════════════════════════════════════
+# OPCIÓN 5 -AÑADIR A COLECCIÓN SCCM
+#═══════════════════════════════════════════════════════════════════
+
+function Invoke-AddToCollection {
+    param([Parameter(Mandatory)][string]$ComputerName)
+
+    # Asegurar configuracion SCCM
+    if ([string]::IsNullOrEmpty($script:SCCMServer)) {
+        $script:SCCMServer = Get-Input "Nombre o IP del servidor SCCM`n(ej: sccmsrv01.empresa.corp)" "Anadir a Coleccion SCCM"
+        if ([string]::IsNullOrEmpty($script:SCCMServer)) { return }
+    }
+    if ([string]::IsNullOrEmpty($script:SiteCode)) {
+        $script:SiteCode = Get-Input "Codigo de sitio SCCM (3 caracteres, ej: P01)" "Anadir a Coleccion SCCM"
+        if ([string]::IsNullOrEmpty($script:SiteCode)) { return }
+    }
+
+    $collName = Get-Input "Nombre (o parte del nombre) de la coleccion de dispositivos" "Anadir '$ComputerName' a Coleccion"
+    if ([string]::IsNullOrEmpty($collName)) { return }
+
+    Write-Sep
+    Write-Info "Buscando '$ComputerName' en SCCM ($($script:SCCMServer))..."
+    $ns = "root\sms\site_$($script:SiteCode)"
+
+    try {
+        # Obtener ResourceID del equipo
+        $resource = Get-CimInstance -ComputerName $script:SCCMServer -Namespace $ns `
+            -ClassName "SMS_R_System" -Filter "Name='$ComputerName'" -ErrorAction Stop |
+            Select-Object -First 1
+
+        if (-not $resource) {
+            Write-Fail "Equipo '$ComputerName' no encontrado en SCCM (sin inventario aun)."
+            Set-Status "Equipo no encontrado en SCCM" ([System.Drawing.Color]::Tomato)
+            return
+        }
+        Write-Ok "Equipo encontrado. ResourceID: $($resource.ResourceId)"
+
+        # Buscar colecciones de dispositivos (CollectionType=2) que coincidan
+        Write-Info "Buscando colecciones que coincidan con '$collName'..."
+        $collections = @(Get-CimInstance -ComputerName $script:SCCMServer -Namespace $ns `
+            -ClassName "SMS_Collection" -Filter "CollectionType=2 AND Name LIKE '%$collName%'" `
+            -ErrorAction Stop)
+
+        if ($collections.Count -eq 0) {
+            Write-Fail "No se encontraron colecciones de dispositivos con '$collName'."
+            Set-Status "Coleccion no encontrada" ([System.Drawing.Color]::Tomato)
+            return
+        }
+
+        $targetColl = $null
+        if ($collections.Count -eq 1) {
+            $targetColl = $collections[0]
+        } else {
+            Write-Warn "Se encontraron $($collections.Count) colecciones:"
+            $i = 1
+            foreach ($c in $collections) {
+                Append-Output ("    {0,2}. [{1}]  {2}  ({3} miembros)" -f $i, $c.CollectionID, $c.Name, $c.MemberCount) `
+                              ([System.Drawing.Color]::LightYellow)
+                $i++
+            }
+            $exactName = Get-Input "Introduce el nombre EXACTO de la coleccion destino" "Seleccionar coleccion"
+            if ([string]::IsNullOrEmpty($exactName)) { return }
+            $targetColl = $collections | Where-Object { $_.Name -eq $exactName } | Select-Object -First 1
+            if (-not $targetColl) {
+                Write-Fail "Nombre no coincide con ninguna coleccion de la lista."
+                Set-Status "Coleccion no seleccionada" ([System.Drawing.Color]::Tomato)
+                return
+            }
+        }
+
+        Write-Info "Coleccion destino: [$($targetColl.CollectionID)] $($targetColl.Name)"
+        if (-not (Confirm-Action "Anadir '$ComputerName' como miembro directo de:`n[$($targetColl.CollectionID)] $($targetColl.Name)`n`n¿Confirmar?")) { return }
+
+        # Crear regla de membresía directa via WMI (SMS_CollectionRuleDirect)
+        $ruleClass = [wmiclass]"\\$($script:SCCMServer)\$($ns):SMS_CollectionRuleDirect"
+        $rule = $ruleClass.CreateInstance()
+        $rule.RuleName           = $ComputerName
+        $rule.ResourceClassName  = "SMS_R_System"
+        $rule.ResourceID         = [uint32]$resource.ResourceId
+
+        $collWmi = Get-WmiObject -ComputerName $script:SCCMServer -Namespace $ns `
+            -Class "SMS_Collection" -Filter "CollectionID='$($targetColl.CollectionID)'"
+        $rv = $collWmi.AddMembershipRule($rule)
+
+        if ($rv.ReturnValue -eq 0) {
+            Write-Ok "Equipo '$ComputerName' anadido a '$($targetColl.Name)'."
+            Write-Info "  La membresía sera efectiva en el proximo ciclo de evaluacion de la coleccion."
+            Set-Status "Anadido a '$($targetColl.Name)'" ([System.Drawing.Color]::LightGreen)
+        } else {
+            Write-Warn "AddMembershipRule devolvio codigo $($rv.ReturnValue)."
+            Set-Status "WARN al anadir a coleccion (rv=$($rv.ReturnValue))" ([System.Drawing.Color]::Yellow)
+        }
+    } catch {
+        Write-Fail "Error al anadir a coleccion: $_"
+        Write-Info "  Verifica que tienes permisos de escritura sobre la coleccion en SCCM."
+        Set-Status "Error al anadir a coleccion" ([System.Drawing.Color]::Tomato)
+    }
+    Append-Output "" $white
+}
+
+#endregion
+
+#region ═══════════════════════════════════════════════════════════
 # INTERFAZ GRÁFICA (WinForms)
 #═══════════════════════════════════════════════════════════════════
 
@@ -1026,26 +1128,31 @@ $sep.Size       = New-Object System.Drawing.Size(2000, 1)
 $sep.BackColor  = [System.Drawing.Color]::FromArgb(70,70,70)
 $topPanel.Controls.Add($sep)
 
-# Botones de acción
-$btnMaster   = New-FlatButton "  Comprobar Masterizacion"  10 120 195 30 $accent
-$btnSoftware = New-FlatButton "  Comprobar Software SCCM" 210 120 195 30 $accent
-$btnUsb      = New-FlatButton "  Borrar Drivers USB"       410 120 155 30 $btnRed
-$btnInfo     = New-FlatButton "  Info del Sistema"         570 120 135 30 ([System.Drawing.Color]::FromArgb(40, 110, 60))
-$btnClear    = New-FlatButton "  Limpiar"                  710 120  80 30 $btnGray
-$btnCancel   = New-FlatButton "  Cancelar"                 795 120  90 30 ([System.Drawing.Color]::FromArgb(200,100,0))
-$btnRestart      = New-FlatButton "  Reiniciar Equipo"          10 157 180 28 ([System.Drawing.Color]::FromArgb(160, 80, 0))
-$btnGPUpdate     = New-FlatButton "  GPUpdate /force"           200 157 165 28 ([System.Drawing.Color]::FromArgb(0, 100, 140))
-$btnPolicyCycles = New-FlatButton "  Ciclos de Politicas"       375 157 185 28 ([System.Drawing.Color]::FromArgb(60, 80, 130))
+# ── Fila 1: comprobacion y diagnostico ───────────────────────────
+$btnMaster   = New-FlatButton "  Masterizacion"        10 120 175 28 $accent
+$btnSoftware = New-FlatButton "  Software SCCM"       190 120 175 28 $accent
+$btnInfo     = New-FlatButton "  Info del Sistema"    370 120 150 28 ([System.Drawing.Color]::FromArgb(40, 110, 60))
+$btnUsb      = New-FlatButton "  Borrar USB"          525 120 130 28 $btnRed
+$btnClear    = New-FlatButton "  Limpiar"             670 120  75 28 $btnGray
+$btnCancel   = New-FlatButton "  Cancelar"            750 120  90 28 ([System.Drawing.Color]::FromArgb(200, 100, 0))
+
+# ── Fila 2: acciones rapidas ──────────────────────────────────────
+$btnRestart      = New-FlatButton "  Reiniciar"            10 153 140 28 ([System.Drawing.Color]::FromArgb(160,  80,   0))
+$btnGPUpdate     = New-FlatButton "  GPUpdate /force"     155 153 155 28 ([System.Drawing.Color]::FromArgb(  0, 100, 140))
+$btnPolicyCycles = New-FlatButton "  Ciclos SCCM"         315 153 150 28 ([System.Drawing.Color]::FromArgb( 60,  80, 130))
+$btnAddCollection= New-FlatButton "  Anadir a Coleccion"  470 153 185 28 ([System.Drawing.Color]::FromArgb(  0, 110, 100))
+
 $btnCancel.Enabled = $false
 $topPanel.Controls.Add($btnMaster)
 $topPanel.Controls.Add($btnSoftware)
-$topPanel.Controls.Add($btnUsb)
 $topPanel.Controls.Add($btnInfo)
+$topPanel.Controls.Add($btnUsb)
 $topPanel.Controls.Add($btnClear)
 $topPanel.Controls.Add($btnCancel)
 $topPanel.Controls.Add($btnRestart)
 $topPanel.Controls.Add($btnGPUpdate)
 $topPanel.Controls.Add($btnPolicyCycles)
+$topPanel.Controls.Add($btnAddCollection)
 
 # ── Área de salida ────────────────────────────────────────────────
 $script:outputBox              = New-Object System.Windows.Forms.RichTextBox
@@ -1083,11 +1190,12 @@ function Set-ButtonsEnabled {
     $btnSoftware.Enabled = $enabled
     $btnUsb.Enabled      = $enabled
     $btnInfo.Enabled     = $enabled
-    $btnRestart.Enabled      = $enabled
-    $btnGPUpdate.Enabled     = $enabled
-    $btnPolicyCycles.Enabled = $enabled
-    $btnSN.Enabled           = $enabled
-    $btnPing.Enabled         = $enabled
+    $btnRestart.Enabled       = $enabled
+    $btnGPUpdate.Enabled      = $enabled
+    $btnPolicyCycles.Enabled  = $enabled
+    $btnAddCollection.Enabled = $enabled
+    $btnSN.Enabled            = $enabled
+    $btnPing.Enabled          = $enabled
     $btnCancel.Enabled   = -not $enabled
 }
 
@@ -1284,6 +1392,16 @@ $btnPolicyCycles.Add_Click({
     }
     Write-Sep
     Append-Output "" $white
+    Set-ButtonsEnabled $true
+})
+
+$btnAddCollection.Add_Click({
+    $target = $txtEquipo.Text.Trim()
+    if ([string]::IsNullOrEmpty($target)) { return }
+    Set-ButtonsEnabled $false
+    Set-Status "Anadiendo '$target' a coleccion SCCM..." ([System.Drawing.Color]::Yellow)
+    try   { Invoke-AddToCollection -ComputerName $target }
+    catch { Write-Fail "Error inesperado: $_" }
     Set-ButtonsEnabled $true
 })
 
