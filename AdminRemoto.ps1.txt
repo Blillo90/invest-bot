@@ -654,8 +654,40 @@ function Invoke-SoftwareCheck {
     if ($apps) {
         Write-Ok "Aplicacion(es) encontrada(s) en Centro de Software:"
         foreach ($a in $apps) {
-            Append-Output ("    > {0}  |  Estado: {1}  |  Version: {2}" -f $a.Name, $a.InstallState, $a.SoftwareVersion) `
-                          ([System.Drawing.Color]::LightGreen)
+            $aColor = if ($a.InstallState -eq "Installed") { [System.Drawing.Color]::LightGreen }
+                      elseif ($a.InstallState -eq "NotInstalled") { [System.Drawing.Color]::Yellow }
+                      else { [System.Drawing.Color]::LightYellow }
+            Append-Output ("    > {0}  |  Estado: {1}  |  Version: {2}" -f $a.Name, $a.InstallState, $a.SoftwareVersion) $aColor
+        }
+
+        $notInstalled = @($apps | Where-Object { $_.InstallState -eq "NotInstalled" })
+        if ($notInstalled.Count -gt 0) {
+            $appList = ($notInstalled | ForEach-Object { $_.Name }) -join "`n  - "
+            if (Confirm-Action "Las siguientes aplicaciones NO estan instaladas en '$ComputerName':`n`n  - $appList`n`n¿Lanzar instalacion via SCCM ahora?") {
+                foreach ($app in $notInstalled) {
+                    Write-Info "Lanzando instalacion de '$($app.Name)'..."
+                    try {
+                        $rv = Invoke-Command -ComputerName $ComputerName `
+                            -ArgumentList $app.Id, $app.Revision, $app.IsMachineTarget -ScriptBlock {
+                                param($appId, $appRev, $isMachine)
+                                $r = Invoke-CimMethod -Namespace "root\ccm\clientsdk" -ClassName "CCM_Application" `
+                                    -MethodName "Install" -ErrorAction Stop -Arguments @{
+                                        Id               = $appId
+                                        Revision         = $appRev
+                                        IsMachineTarget  = $isMachine
+                                        EnforcePreference = [uint32]0
+                                        Priority         = "High"
+                                        IsRebootIfNeeded = $false
+                                    }
+                                return $r.ReturnValue
+                            }
+                        if ($rv -eq 0) { Write-Ok   "'$($app.Name)': instalacion iniciada (el cliente SCCM la procesara en breve)." }
+                        else            { Write-Warn "'$($app.Name)': metodo Install devolvio codigo $rv." }
+                    } catch {
+                        Write-Fail "Error al instalar '$($app.Name)': $_"
+                    }
+                }
+            }
         }
         return
     }
