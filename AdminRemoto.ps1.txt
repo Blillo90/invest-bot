@@ -665,28 +665,59 @@ function Invoke-SoftwareCheck {
             if (Confirm-Action "Las siguientes aplicaciones NO estan instaladas en '$ComputerName':`n`n  - $appList`n`n¿Lanzar instalacion via SCCM ahora?") {
                 foreach ($app in $notInstalled) {
                     Write-Info "Lanzando instalacion de '$($app.Name)'..."
+                    # Extraer y castear tipos antes de entrar en remoting
+                    $appId     = [string]$app.Id
+                    $appRev    = [uint32]$app.Revision
+                    $isMachine = [bool]$app.IsMachineTarget
                     try {
-                        $rv = Invoke-Command -ComputerName $ComputerName `
-                            -ArgumentList $app.Id, $app.Revision, $app.IsMachineTarget -ScriptBlock {
-                                param($appId, $appRev, $isMachine)
-                                $r = Invoke-CimMethod -Namespace "root\ccm\clientsdk" -ClassName "CCM_Application" `
-                                    -MethodName "Install" -ErrorAction Stop -Arguments @{
-                                        Id               = $appId
-                                        Revision         = $appRev
-                                        IsMachineTarget  = $isMachine
+                        # $using: preserva los tipos; try/catch interno devuelve el error real si lo hay
+                        $result = Invoke-Command -ComputerName $ComputerName -ScriptBlock {
+                            try {
+                                $r = Invoke-CimMethod -Namespace "root\ccm\clientsdk" `
+                                    -ClassName "CCM_Application" -MethodName "Install" -Arguments @{
+                                        Id                = $using:appId
+                                        Revision          = [uint32]$using:appRev
+                                        IsMachineTarget   = [bool]$using:isMachine
                                         EnforcePreference = [uint32]0
-                                        Priority         = "High"
-                                        IsRebootIfNeeded = $false
+                                        Priority          = "High"
+                                        IsRebootIfNeeded  = $false
                                     }
-                                return [int]$r.ReturnValue
+                                [pscustomobject]@{ rv = [int]$r.ReturnValue; err = "" }
+                            } catch {
+                                [pscustomobject]@{ rv = -1; err = $_.ToString() }
                             }
-                        # CCM_Application.Install es asincrono: cualquier rv sin excepcion = solicitud aceptada
-                        if ($rv -eq 0) {
-                            Write-Ok "'$($app.Name)': instalacion iniciada (el cliente SCCM la procesara en breve)."
-                        } else {
-                            Write-Ok "'$($app.Name)': solicitud enviada al cliente SCCM (rv=$rv)."
                         }
-                        Set-Status "Instalacion iniciada: $($app.Name)" ([System.Drawing.Color]::LightGreen)
+
+                        if ($result -and $result.err) {
+                            Write-Fail "'$($app.Name)': el cliente SCCM rechazo la solicitud: $($result.err)"
+                            Set-Status "Error al instalar: $($app.Name)" ([System.Drawing.Color]::Tomato)
+                        } else {
+                            $rv = if ($result) { $result.rv } else { $null }
+                            Write-Ok "'$($app.Name)': solicitud enviada (rv=$rv). Comprobando estado en 5s..."
+                            Set-Status "Instalacion solicitada: $($app.Name)" ([System.Drawing.Color]::Cyan)
+                            Start-Sleep -Seconds 5
+                            [System.Windows.Forms.Application]::DoEvents()
+                            $check = Get-CimInstance -ComputerName $ComputerName `
+                                        -Namespace "root\ccm\clientsdk" -ClassName "CCM_Application" `
+                                        -ErrorAction SilentlyContinue |
+                                     Where-Object { $_.Id -eq $app.Id } | Select-Object -First 1
+                            if ($check) {
+                                switch ($check.InstallState) {
+                                    "Installed"    {
+                                        Write-Ok "'$($app.Name)': instalado correctamente."
+                                        Set-Status "Instalado: $($app.Name)" ([System.Drawing.Color]::LightGreen)
+                                    }
+                                    "Installing"   {
+                                        Write-Ok "'$($app.Name)': instalacion en progreso..."
+                                        Set-Status "Instalando: $($app.Name)" ([System.Drawing.Color]::Cyan)
+                                    }
+                                    default        {
+                                        Write-Warn "'$($app.Name)': estado tras solicitud = $($check.InstallState). Puede necesitar mas tiempo o revisar el cliente SCCM."
+                                        Set-Status "Estado: $($check.InstallState)" ([System.Drawing.Color]::Yellow)
+                                    }
+                                }
+                            }
+                        }
                     } catch {
                         Write-Fail "Error al instalar '$($app.Name)': $_"
                         Set-Status "Error al instalar: $($app.Name)" ([System.Drawing.Color]::Tomato)
