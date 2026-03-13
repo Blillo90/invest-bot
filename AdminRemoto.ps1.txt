@@ -49,6 +49,7 @@ $PSDefaultParameterValues['Get-CimInstance:ErrorAction'] = 'SilentlyContinue'
 
 $script:outputBox        = $null
 $script:statusLabel      = $null
+$script:lblSccmInfo      = $null
 $script:cancelRequested  = $false
 $script:Modo             = "Nacional"   # "Nacional" | "Divisional"
 
@@ -77,6 +78,17 @@ function Set-Status {
         $script:statusLabel.Text      = "  $msg"
         $script:statusLabel.ForeColor = $color
         [System.Windows.Forms.Application]::DoEvents()
+    }
+}
+
+function Update-SccmLabel {
+    if (-not $script:lblSccmInfo) { return }
+    if ([string]::IsNullOrEmpty($script:SCCMServer)) {
+        $script:lblSccmInfo.Text      = "SCCM: no configurado"
+        $script:lblSccmInfo.ForeColor = [System.Drawing.Color]::FromArgb(120, 120, 120)
+    } else {
+        $script:lblSccmInfo.Text      = "SCCM: $($script:SCCMServer)  [$($script:SiteCode)]"
+        $script:lblSccmInfo.ForeColor = [System.Drawing.Color]::FromArgb(0, 190, 140)
     }
 }
 
@@ -898,6 +910,7 @@ function Invoke-AddToCollection {
         $script:SiteCode = Get-Input "Codigo de sitio SCCM (3 caracteres, ej: P01)" "Anadir a Coleccion SCCM"
         if ([string]::IsNullOrEmpty($script:SiteCode)) { return }
     }
+    Update-SccmLabel
 
     $collName = Get-Input "Nombre (o parte del nombre) de la coleccion de dispositivos" "Anadir '$ComputerName' a Coleccion"
     if ([string]::IsNullOrEmpty($collName)) { return }
@@ -1092,6 +1105,18 @@ $btnSN   = New-FlatButton "S/N"   406 57 65 30 ([System.Drawing.Color]::FromArgb
 $topPanel.Controls.Add($btnPing)
 $topPanel.Controls.Add($btnSN)
 
+# Indicador servidor SCCM (a la derecha del botón S/N)
+$script:lblSccmInfo           = New-Object System.Windows.Forms.Label
+$script:lblSccmInfo.AutoSize  = $false
+$script:lblSccmInfo.Width     = 380
+$script:lblSccmInfo.Height    = 18
+$script:lblSccmInfo.Location  = New-Object System.Drawing.Point(480, 62)
+$script:lblSccmInfo.Font      = $fontSmall
+$script:lblSccmInfo.Text      = "SCCM: no configurado"
+$script:lblSccmInfo.ForeColor = [System.Drawing.Color]::FromArgb(120, 120, 120)
+$topPanel.Controls.Add($script:lblSccmInfo)
+Update-SccmLabel   # muestra los parametros pasados al script si los hay
+
 # Fila 2: selector de modo Nacional / Divisional
 $lblModo            = New-Object System.Windows.Forms.Label
 $lblModo.Text       = "Modo:"
@@ -1230,6 +1255,7 @@ $btnSN.Add_Click({
         $script:SiteCode = Get-Input "Codigo de sitio SCCM (3 caracteres, ej: P01)" "Buscar por numero de serie"
         if ([string]::IsNullOrEmpty($script:SiteCode)) { return }
     }
+    Update-SccmLabel
 
     $serial = Get-Input "Introduce el numero de serie del equipo" "Buscar equipo por S/N"
     if ([string]::IsNullOrEmpty($serial)) { return }
@@ -1262,6 +1288,7 @@ $btnSN.Add_Click({
         # Resetear para que el usuario pueda corregir en el siguiente intento
         $script:SCCMServer = ""
         $script:SiteCode   = ""
+        Update-SccmLabel
         Set-Status "Error consultando SCCM" ([System.Drawing.Color]::Tomato)
     }
     Append-Output "" $white
