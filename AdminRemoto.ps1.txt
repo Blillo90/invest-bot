@@ -942,11 +942,32 @@ function Invoke-AddToCollection {
     Write-Info "Buscando '$ComputerName' en SCCM ($($script:SCCMServer))..."
     $ns = "root\sms\site_$($script:SiteCode)"
 
+    # Pedir credenciales si aun no las tenemos
+    $credPrompted = $false
+    $ensureCred = {
+        if (-not $script:SccmCred -and -not $credPrompted) {
+            Write-Warn "Acceso denegado. Introduce credenciales con permisos en SCCM."
+            $c = Get-Credential -Message "Credenciales para SCCM ($($script:SCCMServer))"
+            if (-not $c) { throw "Credenciales canceladas por el usuario." }
+            $script:SccmCred = $c
+            $script:credPrompted = $true
+        }
+    }
+
+    $cimBase = @{ ComputerName=$script:SCCMServer; Namespace=$ns; ErrorAction="Stop" }
+
     try {
-        # Obtener ResourceID del equipo
-        $resource = Get-CimInstance -ComputerName $script:SCCMServer -Namespace $ns `
-            -ClassName "SMS_R_System" -Filter "Name='$ComputerName'" -ErrorAction Stop |
-            Select-Object -First 1
+        # Primera llamada - si falla por permisos, pedir cred y reintentar
+        try {
+            if ($script:SccmCred) { $cimBase.Credential = $script:SccmCred }
+            $resource = Get-CimInstance @cimBase -ClassName "SMS_R_System" `
+                -Filter "Name='$ComputerName'" | Select-Object -First 1
+        } catch [System.UnauthorizedAccessException],[Microsoft.Management.Infrastructure.CimException] {
+            & $ensureCred
+            $cimBase.Credential = $script:SccmCred
+            $resource = Get-CimInstance @cimBase -ClassName "SMS_R_System" `
+                -Filter "Name='$ComputerName'" | Select-Object -First 1
+        }
 
         if (-not $resource) {
             Write-Fail "Equipo '$ComputerName' no encontrado en SCCM (sin inventario aun)."
@@ -957,9 +978,8 @@ function Invoke-AddToCollection {
 
         # Buscar colecciones de dispositivos (CollectionType=2) que coincidan
         Write-Info "Buscando colecciones que coincidan con '$collName'..."
-        $collections = @(Get-CimInstance -ComputerName $script:SCCMServer -Namespace $ns `
-            -ClassName "SMS_Collection" -Filter "CollectionType=2 AND Name LIKE '%$collName%'" `
-            -ErrorAction Stop)
+        $collections = @(Get-CimInstance @cimBase -ClassName "SMS_Collection" `
+            -Filter "CollectionType=2 AND Name LIKE '%$collName%'")
 
         if ($collections.Count -eq 0) {
             Write-Fail "No se encontraron colecciones de dispositivos con '$collName'."
@@ -992,14 +1012,18 @@ function Invoke-AddToCollection {
         if (-not (Confirm-Action "Anadir '$ComputerName' como miembro directo de:`n[$($targetColl.CollectionID)] $($targetColl.Name)`n`n¿Confirmar?")) { return }
 
         # Crear regla de membresía directa via WMI (SMS_CollectionRuleDirect)
-        $ruleClass = [wmiclass]"\\$($script:SCCMServer)\$($ns):SMS_CollectionRuleDirect"
+        $wmiConnOpts = @{ ComputerName=$script:SCCMServer; Namespace=$ns; Class="SMS_CollectionRuleDirect" }
+        if ($script:SccmCred) { $wmiConnOpts.Credential = $script:SccmCred }
+        $ruleClass = Get-WmiObject @wmiConnOpts -List | Where-Object { $_.Name -eq "SMS_CollectionRuleDirect" }
         $rule = $ruleClass.CreateInstance()
         $rule.RuleName           = $ComputerName
         $rule.ResourceClassName  = "SMS_R_System"
         $rule.ResourceID         = [uint32]$resource.ResourceId
 
-        $collWmi = Get-WmiObject -ComputerName $script:SCCMServer -Namespace $ns `
-            -Class "SMS_Collection" -Filter "CollectionID='$($targetColl.CollectionID)'"
+        $collWmiOpts = @{ ComputerName=$script:SCCMServer; Namespace=$ns
+                          Class="SMS_Collection"; Filter="CollectionID='$($targetColl.CollectionID)'" }
+        if ($script:SccmCred) { $collWmiOpts.Credential = $script:SccmCred }
+        $collWmi = Get-WmiObject @collWmiOpts
         $rv = $collWmi.AddMembershipRule($rule)
 
         if ($rv.ReturnValue -eq 0) {
@@ -1013,6 +1037,7 @@ function Invoke-AddToCollection {
     } catch {
         Write-Fail "Error al anadir a coleccion: $_"
         Write-Info "  Verifica que tienes permisos de escritura sobre la coleccion en SCCM."
+        $script:SccmCred = $null
         Set-Status "Error al anadir a coleccion" ([System.Drawing.Color]::Tomato)
     }
     Append-Output "" $white
@@ -1027,6 +1052,7 @@ function Invoke-AddToCollection {
 $script:ExpectedIssuerLike = $ExpectedIssuerLike
 $script:SCCMServer         = $SCCMServer
 $script:SiteCode           = $SiteCode
+$script:SccmCred           = $null
 
 # ── Colores y fuentes ────────────────────────────────────────────
 $bgDark      = [System.Drawing.Color]::FromArgb(28,  28,  28)
@@ -1293,8 +1319,30 @@ $btnSN.Add_Click({
         $wql    = "SELECT sys.Name FROM SMS_R_System sys " +
                   "JOIN SMS_G_System_PC_BIOS bios ON bios.ResourceID = sys.ResourceID " +
                   "WHERE bios.SerialNumber = '$serial'"
-        $result = Get-CimInstance -ComputerName $script:SCCMServer -Namespace $ns `
-                                  -Query $wql -ErrorAction Stop | Select-Object -First 1
+
+        $cimParams = @{
+            ComputerName = $script:SCCMServer
+            Namespace    = $ns
+            Query        = $wql
+            ErrorAction  = "Stop"
+        }
+        if ($script:SccmCred) { $cimParams.Credential = $script:SccmCred }
+
+        $result = $null
+        try {
+            $result = Get-CimInstance @cimParams | Select-Object -First 1
+        } catch [System.UnauthorizedAccessException],[Microsoft.Management.Infrastructure.CimException] {
+            # Acceso denegado -> pedir credenciales y reintentar
+            Write-Warn "Acceso denegado con el usuario actual. Introduce credenciales con permisos en SCCM."
+            $cred = Get-Credential -Message "Credenciales para consultar SCCM ($($script:SCCMServer))"
+            if (-not $cred) {
+                Set-Status "Cancelado" ([System.Drawing.Color]::Orange)
+                return
+            }
+            $script:SccmCred        = $cred
+            $cimParams.Credential   = $cred
+            $result = Get-CimInstance @cimParams | Select-Object -First 1
+        }
 
         if ($result -and $result.Name) {
             $txtEquipo.Text = $result.Name
@@ -1311,6 +1359,7 @@ $btnSN.Add_Click({
         # Resetear para que el usuario pueda corregir en el siguiente intento
         $script:SCCMServer = ""
         $script:SiteCode   = ""
+        $script:SccmCred   = $null
         Update-SccmLabel
         Set-Status "Error consultando SCCM" ([System.Drawing.Color]::Tomato)
     }
