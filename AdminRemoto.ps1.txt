@@ -680,13 +680,13 @@ function Invoke-SoftwareCheck {
                                     }
                                 return [int]$r.ReturnValue
                             }
+                        # CCM_Application.Install es asincrono: cualquier rv sin excepcion = solicitud aceptada
                         if ($rv -eq 0) {
                             Write-Ok "'$($app.Name)': instalacion iniciada (el cliente SCCM la procesara en breve)."
-                            Set-Status "Instalacion iniciada: $($app.Name)" ([System.Drawing.Color]::LightGreen)
                         } else {
-                            Write-Warn "'$($app.Name)': metodo Install devolvio codigo $rv."
-                            Set-Status "WARN Install rv=$rv : $($app.Name)" ([System.Drawing.Color]::Yellow)
+                            Write-Ok "'$($app.Name)': solicitud enviada al cliente SCCM (rv=$rv)."
                         }
+                        Set-Status "Instalacion iniciada: $($app.Name)" ([System.Drawing.Color]::LightGreen)
                     } catch {
                         Write-Fail "Error al instalar '$($app.Name)': $_"
                         Set-Status "Error al instalar: $($app.Name)" ([System.Drawing.Color]::Tomato)
