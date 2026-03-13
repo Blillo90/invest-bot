@@ -19,8 +19,6 @@
 param(
     [string]$ExpectedIssuerLike = "*Airbus Issuing CA Juan de la Cierva*",
     [string]$TaskName           = "MasterizacionCheck_15min",
-    [string]$SCCMServer         = "",   # Servidor SCCM para busqueda por S/N (ej: sccmsrv01.corp)
-    [string]$SiteCode           = ""    # Codigo de sitio SCCM (ej: P01)
 )
 
 Add-Type -AssemblyName System.Windows.Forms
@@ -49,7 +47,6 @@ $PSDefaultParameterValues['Get-CimInstance:ErrorAction'] = 'SilentlyContinue'
 
 $script:outputBox        = $null
 $script:statusLabel      = $null
-$script:lblSccmInfo      = $null
 $script:cancelRequested  = $false
 $script:Modo             = "Nacional"   # "Nacional" | "Divisional"
 
@@ -81,16 +78,6 @@ function Set-Status {
     }
 }
 
-function Update-SccmLabel {
-    if (-not $script:lblSccmInfo) { return }
-    if ([string]::IsNullOrEmpty($script:SCCMServer)) {
-        $script:lblSccmInfo.Text      = "SCCM: no configurado"
-        $script:lblSccmInfo.ForeColor = [System.Drawing.Color]::FromArgb(120, 120, 120)
-    } else {
-        $script:lblSccmInfo.Text      = "SCCM: $($script:SCCMServer)  [$($script:SiteCode)]"
-        $script:lblSccmInfo.ForeColor = [System.Drawing.Color]::FromArgb(0, 190, 140)
-    }
-}
 
 function Confirm-Action {
     param([string]$message, [string]$title = "Confirmar")
@@ -691,12 +678,18 @@ function Invoke-SoftwareCheck {
                                         Priority         = "High"
                                         IsRebootIfNeeded = $false
                                     }
-                                return $r.ReturnValue
+                                return [int]$r.ReturnValue
                             }
-                        if ($rv -eq 0) { Write-Ok   "'$($app.Name)': instalacion iniciada (el cliente SCCM la procesara en breve)." }
-                        else            { Write-Warn "'$($app.Name)': metodo Install devolvio codigo $rv." }
+                        if ($rv -eq 0) {
+                            Write-Ok "'$($app.Name)': instalacion iniciada (el cliente SCCM la procesara en breve)."
+                            Set-Status "Instalacion iniciada: $($app.Name)" ([System.Drawing.Color]::LightGreen)
+                        } else {
+                            Write-Warn "'$($app.Name)': metodo Install devolvio codigo $rv."
+                            Set-Status "WARN Install rv=$rv : $($app.Name)" ([System.Drawing.Color]::Yellow)
+                        }
                     } catch {
                         Write-Fail "Error al instalar '$($app.Name)': $_"
+                        Set-Status "Error al instalar: $($app.Name)" ([System.Drawing.Color]::Tomato)
                     }
                 }
             }
@@ -917,143 +910,12 @@ function Invoke-UsbDriverClean {
 
 #endregion
 
-#region ═══════════════════════════════════════════════════════════
-# OPCIÓN 5 -AÑADIR A COLECCIÓN SCCM
-#═══════════════════════════════════════════════════════════════════
-
-function Invoke-AddToCollection {
-    param([Parameter(Mandatory)][string]$ComputerName)
-
-    # Asegurar configuracion SCCM
-    if ([string]::IsNullOrEmpty($script:SCCMServer)) {
-        $script:SCCMServer = Get-Input "Nombre o IP del servidor SCCM`n(ej: sccmsrv01.empresa.corp)" "Anadir a Coleccion SCCM"
-        if ([string]::IsNullOrEmpty($script:SCCMServer)) { return }
-    }
-    if ([string]::IsNullOrEmpty($script:SiteCode)) {
-        $script:SiteCode = Get-Input "Codigo de sitio SCCM (3 caracteres, ej: P01)" "Anadir a Coleccion SCCM"
-        if ([string]::IsNullOrEmpty($script:SiteCode)) { return }
-    }
-    Update-SccmLabel
-
-    $collName = Get-Input "Nombre (o parte del nombre) de la coleccion de dispositivos" "Anadir '$ComputerName' a Coleccion"
-    if ([string]::IsNullOrEmpty($collName)) { return }
-
-    Write-Sep
-    Write-Info "Buscando '$ComputerName' en SCCM ($($script:SCCMServer))..."
-    $ns = "root\sms\site_$($script:SiteCode)"
-
-    # Pedir credenciales si aun no las tenemos
-    $credPrompted = $false
-    $ensureCred = {
-        if (-not $script:SccmCred -and -not $credPrompted) {
-            Write-Warn "Acceso denegado. Introduce credenciales con permisos en SCCM."
-            $c = Get-Credential -Message "Credenciales para SCCM ($($script:SCCMServer))"
-            if (-not $c) { throw "Credenciales canceladas por el usuario." }
-            $script:SccmCred = $c
-            $script:credPrompted = $true
-        }
-    }
-
-    $cimBase = @{ ComputerName=$script:SCCMServer; Namespace=$ns; ErrorAction="Stop" }
-
-    try {
-        # Primera llamada - si falla por permisos, pedir cred y reintentar
-        try {
-            if ($script:SccmCred) { $cimBase.Credential = $script:SccmCred }
-            $resource = Get-CimInstance @cimBase -ClassName "SMS_R_System" `
-                -Filter "Name='$ComputerName'" | Select-Object -First 1
-        } catch [System.UnauthorizedAccessException],[Microsoft.Management.Infrastructure.CimException] {
-            & $ensureCred
-            $cimBase.Credential = $script:SccmCred
-            $resource = Get-CimInstance @cimBase -ClassName "SMS_R_System" `
-                -Filter "Name='$ComputerName'" | Select-Object -First 1
-        }
-
-        if (-not $resource) {
-            Write-Fail "Equipo '$ComputerName' no encontrado en SCCM (sin inventario aun)."
-            Set-Status "Equipo no encontrado en SCCM" ([System.Drawing.Color]::Tomato)
-            return
-        }
-        Write-Ok "Equipo encontrado. ResourceID: $($resource.ResourceId)"
-
-        # Buscar colecciones de dispositivos (CollectionType=2) que coincidan
-        Write-Info "Buscando colecciones que coincidan con '$collName'..."
-        $collections = @(Get-CimInstance @cimBase -ClassName "SMS_Collection" `
-            -Filter "CollectionType=2 AND Name LIKE '%$collName%'")
-
-        if ($collections.Count -eq 0) {
-            Write-Fail "No se encontraron colecciones de dispositivos con '$collName'."
-            Set-Status "Coleccion no encontrada" ([System.Drawing.Color]::Tomato)
-            return
-        }
-
-        $targetColl = $null
-        if ($collections.Count -eq 1) {
-            $targetColl = $collections[0]
-        } else {
-            Write-Warn "Se encontraron $($collections.Count) colecciones:"
-            $i = 1
-            foreach ($c in $collections) {
-                Append-Output ("    {0,2}. [{1}]  {2}  ({3} miembros)" -f $i, $c.CollectionID, $c.Name, $c.MemberCount) `
-                              ([System.Drawing.Color]::LightYellow)
-                $i++
-            }
-            $exactName = Get-Input "Introduce el nombre EXACTO de la coleccion destino" "Seleccionar coleccion"
-            if ([string]::IsNullOrEmpty($exactName)) { return }
-            $targetColl = $collections | Where-Object { $_.Name -eq $exactName } | Select-Object -First 1
-            if (-not $targetColl) {
-                Write-Fail "Nombre no coincide con ninguna coleccion de la lista."
-                Set-Status "Coleccion no seleccionada" ([System.Drawing.Color]::Tomato)
-                return
-            }
-        }
-
-        Write-Info "Coleccion destino: [$($targetColl.CollectionID)] $($targetColl.Name)"
-        if (-not (Confirm-Action "Anadir '$ComputerName' como miembro directo de:`n[$($targetColl.CollectionID)] $($targetColl.Name)`n`n¿Confirmar?")) { return }
-
-        # Crear regla de membresía directa via WMI (SMS_CollectionRuleDirect)
-        $wmiConnOpts = @{ ComputerName=$script:SCCMServer; Namespace=$ns; Class="SMS_CollectionRuleDirect" }
-        if ($script:SccmCred) { $wmiConnOpts.Credential = $script:SccmCred }
-        $ruleClass = Get-WmiObject @wmiConnOpts -List | Where-Object { $_.Name -eq "SMS_CollectionRuleDirect" }
-        $rule = $ruleClass.CreateInstance()
-        $rule.RuleName           = $ComputerName
-        $rule.ResourceClassName  = "SMS_R_System"
-        $rule.ResourceID         = [uint32]$resource.ResourceId
-
-        $collWmiOpts = @{ ComputerName=$script:SCCMServer; Namespace=$ns
-                          Class="SMS_Collection"; Filter="CollectionID='$($targetColl.CollectionID)'" }
-        if ($script:SccmCred) { $collWmiOpts.Credential = $script:SccmCred }
-        $collWmi = Get-WmiObject @collWmiOpts
-        $rv = $collWmi.AddMembershipRule($rule)
-
-        if ($rv.ReturnValue -eq 0) {
-            Write-Ok "Equipo '$ComputerName' anadido a '$($targetColl.Name)'."
-            Write-Info "  La membresía sera efectiva en el proximo ciclo de evaluacion de la coleccion."
-            Set-Status "Anadido a '$($targetColl.Name)'" ([System.Drawing.Color]::LightGreen)
-        } else {
-            Write-Warn "AddMembershipRule devolvio codigo $($rv.ReturnValue)."
-            Set-Status "WARN al anadir a coleccion (rv=$($rv.ReturnValue))" ([System.Drawing.Color]::Yellow)
-        }
-    } catch {
-        Write-Fail "Error al anadir a coleccion: $_"
-        Write-Info "  Verifica que tienes permisos de escritura sobre la coleccion en SCCM."
-        $script:SccmCred = $null
-        Set-Status "Error al anadir a coleccion" ([System.Drawing.Color]::Tomato)
-    }
-    Append-Output "" $white
-}
-
-#endregion
 
 #region ═══════════════════════════════════════════════════════════
 # INTERFAZ GRÁFICA (WinForms)
 #═══════════════════════════════════════════════════════════════════
 
 $script:ExpectedIssuerLike = $ExpectedIssuerLike
-$script:SCCMServer         = $SCCMServer
-$script:SiteCode           = $SiteCode
-$script:SccmCred           = $null
-
 # ── Colores y fuentes ────────────────────────────────────────────
 $bgDark      = [System.Drawing.Color]::FromArgb(28,  28,  28)
 $bgPanel     = [System.Drawing.Color]::FromArgb(45,  45,  48)
@@ -1150,21 +1012,9 @@ $topPanel.Controls.Add($txtEquipo)
 # Botón Ping
 $btnPing = New-FlatButton "Ping"  340 57 60 30 $btnGray
 # Botón buscar por número de serie
-$btnSN   = New-FlatButton "S/N"   406 57 65 30 ([System.Drawing.Color]::FromArgb(70, 70, 110))
 $topPanel.Controls.Add($btnPing)
-$topPanel.Controls.Add($btnSN)
 
 # Indicador servidor SCCM (a la derecha del botón S/N)
-$script:lblSccmInfo           = New-Object System.Windows.Forms.Label
-$script:lblSccmInfo.AutoSize  = $false
-$script:lblSccmInfo.Width     = 380
-$script:lblSccmInfo.Height    = 18
-$script:lblSccmInfo.Location  = New-Object System.Drawing.Point(480, 62)
-$script:lblSccmInfo.Font      = $fontSmall
-$script:lblSccmInfo.Text      = "SCCM: no configurado"
-$script:lblSccmInfo.ForeColor = [System.Drawing.Color]::FromArgb(120, 120, 120)
-$topPanel.Controls.Add($script:lblSccmInfo)
-Update-SccmLabel   # muestra los parametros pasados al script si los hay
 
 # Fila 2: selector de modo Nacional / Divisional
 $lblModo            = New-Object System.Windows.Forms.Label
@@ -1214,7 +1064,6 @@ $btnCancel   = New-FlatButton "  Cancelar"            750 120  90 28 ([System.Dr
 $btnRestart      = New-FlatButton "  Reiniciar"            10 153 140 28 ([System.Drawing.Color]::FromArgb(160,  80,   0))
 $btnGPUpdate     = New-FlatButton "  GPUpdate /force"     155 153 155 28 ([System.Drawing.Color]::FromArgb(  0, 100, 140))
 $btnPolicyCycles = New-FlatButton "  Ciclos SCCM"         315 153 150 28 ([System.Drawing.Color]::FromArgb( 60,  80, 130))
-$btnAddCollection= New-FlatButton "  Anadir a Coleccion"  470 153 185 28 ([System.Drawing.Color]::FromArgb(  0, 110, 100))
 
 $btnCancel.Enabled = $false
 $topPanel.Controls.Add($btnMaster)
@@ -1226,7 +1075,6 @@ $topPanel.Controls.Add($btnCancel)
 $topPanel.Controls.Add($btnRestart)
 $topPanel.Controls.Add($btnGPUpdate)
 $topPanel.Controls.Add($btnPolicyCycles)
-$topPanel.Controls.Add($btnAddCollection)
 
 # ── Área de salida ────────────────────────────────────────────────
 $script:outputBox              = New-Object System.Windows.Forms.RichTextBox
@@ -1267,8 +1115,6 @@ function Set-ButtonsEnabled {
     $btnRestart.Enabled       = $enabled
     $btnGPUpdate.Enabled      = $enabled
     $btnPolicyCycles.Enabled  = $enabled
-    $btnAddCollection.Enabled = $enabled
-    $btnSN.Enabled            = $enabled
     $btnPing.Enabled          = $enabled
     $btnCancel.Enabled   = -not $enabled
 }
@@ -1294,78 +1140,6 @@ function Get-ValidComputer {
 }
 
 # ── Eventos ───────────────────────────────────────────────────────
-$btnSN.Add_Click({
-    # Asegurar que tenemos servidor SCCM y site code configurados
-    if ([string]::IsNullOrEmpty($script:SCCMServer)) {
-        $script:SCCMServer = Get-Input "Nombre o IP del servidor SCCM`n(ej: sccmsrv01.empresa.corp)" "Buscar por numero de serie"
-        if ([string]::IsNullOrEmpty($script:SCCMServer)) { return }
-    }
-    if ([string]::IsNullOrEmpty($script:SiteCode)) {
-        $script:SiteCode = Get-Input "Codigo de sitio SCCM (3 caracteres, ej: P01)" "Buscar por numero de serie"
-        if ([string]::IsNullOrEmpty($script:SiteCode)) { return }
-    }
-    Update-SccmLabel
-
-    $serial = Get-Input "Introduce el numero de serie del equipo" "Buscar equipo por S/N"
-    if ([string]::IsNullOrEmpty($serial)) { return }
-
-    $serial = $serial.Trim().ToUpper()
-    Set-Status "Buscando S/N '$serial' en SCCM..." ([System.Drawing.Color]::Yellow)
-    Write-Sep
-    Write-Info "Buscando equipo con S/N '$serial' en SCCM ($($script:SCCMServer))..."
-
-    try {
-        $ns     = "root\sms\site_$($script:SiteCode)"
-        $wql    = "SELECT sys.Name FROM SMS_R_System sys " +
-                  "JOIN SMS_G_System_PC_BIOS bios ON bios.ResourceID = sys.ResourceID " +
-                  "WHERE bios.SerialNumber = '$serial'"
-
-        $cimParams = @{
-            ComputerName = $script:SCCMServer
-            Namespace    = $ns
-            Query        = $wql
-            ErrorAction  = "Stop"
-        }
-        if ($script:SccmCred) { $cimParams.Credential = $script:SccmCred }
-
-        $result = $null
-        try {
-            $result = Get-CimInstance @cimParams | Select-Object -First 1
-        } catch [System.UnauthorizedAccessException],[Microsoft.Management.Infrastructure.CimException] {
-            # Acceso denegado -> pedir credenciales y reintentar
-            Write-Warn "Acceso denegado con el usuario actual. Introduce credenciales con permisos en SCCM."
-            $cred = Get-Credential -Message "Credenciales para consultar SCCM ($($script:SCCMServer))"
-            if (-not $cred) {
-                Set-Status "Cancelado" ([System.Drawing.Color]::Orange)
-                return
-            }
-            $script:SccmCred        = $cred
-            $cimParams.Credential   = $cred
-            $result = Get-CimInstance @cimParams | Select-Object -First 1
-        }
-
-        if ($result -and $result.Name) {
-            $txtEquipo.Text = $result.Name
-            Write-Ok "S/N '$serial' encontrado -> equipo: $($result.Name)"
-            Set-Status "Equipo encontrado: $($result.Name)" ([System.Drawing.Color]::LightGreen)
-        } else {
-            Write-Warn "No se encontro ningun equipo con S/N '$serial' en SCCM."
-            Write-Info "  Posibles causas: inventario no recibido aun, equipo nuevo, o S/N incorrecto."
-            Set-Status "S/N no encontrado en SCCM" ([System.Drawing.Color]::Yellow)
-        }
-    } catch {
-        Write-Fail "Error al consultar SCCM: $_"
-        Write-Info "  Verifica que el servidor '$($script:SCCMServer)' es correcto y tienes permisos de lectura en el namespace SMS."
-        # Resetear para que el usuario pueda corregir en el siguiente intento
-        $script:SCCMServer = ""
-        $script:SiteCode   = ""
-        $script:SccmCred   = $null
-        Update-SccmLabel
-        Set-Status "Error consultando SCCM" ([System.Drawing.Color]::Tomato)
-    }
-    Append-Output "" $white
-})
-
 $btnPing.Add_Click({
     $computer = $txtEquipo.Text.Trim()
     if ([string]::IsNullOrEmpty($computer)) { return }
@@ -1491,16 +1265,6 @@ $btnPolicyCycles.Add_Click({
     }
     Write-Sep
     Append-Output "" $white
-    Set-ButtonsEnabled $true
-})
-
-$btnAddCollection.Add_Click({
-    $target = $txtEquipo.Text.Trim()
-    if ([string]::IsNullOrEmpty($target)) { return }
-    Set-ButtonsEnabled $false
-    Set-Status "Anadiendo '$target' a coleccion SCCM..." ([System.Drawing.Color]::Yellow)
-    try   { Invoke-AddToCollection -ComputerName $target }
-    catch { Write-Fail "Error inesperado: $_" }
     Set-ButtonsEnabled $true
 })
 
