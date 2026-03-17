@@ -1,0 +1,39 @@
+@import "tailwindcss";
+
+@theme inline {
+  /* Custom color tokens — extend here for design system evolution */
+  --color-slate-750: #1e2d3d;
+  --color-bar-gold: #f59e0b;
+  --color-bar-gold-light: #fbbf24;
+}
+
+/* Scrollbar styling for a polished dark UI */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: #0f172a;
+}
+::-webkit-scrollbar-thumb {
+  background: #334155;
+  border-radius: 3px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #475569;
+}
+
+/* Smooth focus ring for accessibility */
+*:focus-visible {
+  outline: 2px solid #f59e0b;
+  outline-offset: 2px;
+}
+
+html {
+  color-scheme: dark;
+}
+
+body {
+  background-color: #020617; /* slate-950 */
+  color: #f8fafc;            /* slate-50 */
+}
