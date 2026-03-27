@@ -31,16 +31,42 @@ OUTPUT_DIR = REPO_ROOT / "dashboard" / "invest-dashboard" / "public"
 OUTPUT_PATH = OUTPUT_DIR / "backtest-results.json"
 
 # ─── Universe ────────────────────────────────────────────────────────────────
+# 150 large/mega-cap líquidos EE.UU. – misma lista que quant-bot/data/tickers.txt
+# Con 150 tickers:  buy_top_pct=0.07 → ~10 candidatos  |  0.15 → ~22 candidatos
+# sell_out_pct=0.20 → 30 en zona venta  |  0.30 → 45    |  MAX_POSITIONS=12 ✓
 UNIVERSE = [
+    # Tecnología (30)
     "AAPL","MSFT","NVDA","AMZN","META","GOOGL","TSLA","AMD","INTC","NFLX",
     "CRM","ADBE","CSCO","ORCL","SNOW","PLTR","ANET","PANW","FTNT","NOW",
-    "TTD","UNH","LLY","JNJ","ABT","MRK","PFE","AMGN","ISRG","TMO",
+    "TTD","QCOM","AVGO","MU","TXN","KLAC","LRCX","CRWD","MRVL","ADSK",
+    # Salud (16)
+    "UNH","LLY","JNJ","ABT","MRK","PFE","AMGN","ISRG","TMO","MDT",
+    "BMY","CVS","CI","ELV","VRTX","ABBV",
+    # Finanzas (18)
     "JPM","BAC","GS","MS","BLK","SPGI","AXP","CB","V","MA",
-    "CAT","DE","HON","GE","RTX","LMT","UPS",
-    "HD","PG","KO","PEP","COST","WMT","NKE","SBUX","MCD","TJX","LOW",
-    "XOM","CVX","COP","SLB","FCX","NEM","LIN",
-    "BRK-B","DIS","LRCX","XLK","XLF","XLE","XLV","XLI",
-    "SPY",   # también en universo para el filtro de régimen
+    "WFC","C","USB","TFC","PGR","MET","ALL","SCHW",
+    # Consumo discrecional (14)
+    "HD","COST","WMT","NKE","SBUX","MCD","TJX","LOW","BKNG","CMG",
+    "ROST","GM","F","YUM",
+    # Consumo básico (10)
+    "PG","KO","PEP","PM","MO","CL","MDLZ","EL","KMB","STZ",
+    # Industriales (15)
+    "CAT","DE","HON","GE","RTX","LMT","UPS","BA","FDX","MMM",
+    "NOC","ITW","EMR","ETN","PH",
+    # Energía (10)
+    "XOM","CVX","COP","SLB","EOG","PSX","MPC","VLO","OXY","HAL",
+    # Materiales (8)
+    "LIN","FCX","NEM","APD","ECL","DD","PPG","NUE",
+    # Comunicaciones (7)
+    "DIS","T","VZ","CMCSA","CHTR","EA","TTWO",
+    # Utilities (6)
+    "NEE","DUK","SO","AEP","EXC","D",
+    # Real Estate (5)
+    "PLD","AMT","EQIX","SPG","CCI",
+    # Otros large-caps (11)
+    "BRK-B","ZS","NET","SHOP","UBER","PYPL","ICE","DXCM","BIIB","GLD","CDNS",
+    # SPY para filtro de régimen (no se rankea como candidato de compra)
+    "SPY",
 ]
 BENCHMARKS = ["SPY", "ACWI"]
 
