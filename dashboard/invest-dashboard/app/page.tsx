@@ -1,5 +1,6 @@
 // app/page.tsx
 
+import Link from "next/link";
 import EquityChart from "./components/EquityChart";
 import { readFile } from "fs/promises";
 
@@ -15,14 +16,39 @@ type Snapshot = {
   rawLen?: number | null;
 };
 
-type Trade = {
-  side: string;
-  symbol: string;
-  shares: number | null;
-  close: number | null;
-  effective: number | null;
-  reason: string;
+
+const TICKER_NAMES: Record<string, string> = {
+  AAPL: "Apple", MSFT: "Microsoft", NVDA: "Nvidia", AMZN: "Amazon",
+  META: "Meta", GOOGL: "Alphabet", TSLA: "Tesla", AMD: "AMD",
+  INTC: "Intel", NFLX: "Netflix", CRM: "Salesforce", ADBE: "Adobe",
+  CSCO: "Cisco", ORCL: "Oracle", SNOW: "Snowflake", PLTR: "Palantir",
+  ANET: "Arista Networks", PANW: "Palo Alto", FTNT: "Fortinet",
+  NOW: "ServiceNow", TTD: "The Trade Desk", UNH: "UnitedHealth",
+  LLY: "Eli Lilly", JNJ: "Johnson & Johnson", ABT: "Abbott",
+  MRK: "Merck", PFE: "Pfizer", AMGN: "Amgen", ISRG: "Intuitive Surgical",
+  TMO: "Thermo Fisher", JPM: "JPMorgan", BAC: "Bank of America",
+  GS: "Goldman Sachs", MS: "Morgan Stanley", BLK: "BlackRock",
+  SPGI: "S&P Global", AXP: "Amex", CB: "Chubb", V: "Visa", MA: "Mastercard",
+  CAT: "Caterpillar", DE: "John Deere", HON: "Honeywell", GE: "GE Aerospace",
+  RTX: "RTX Corp", LMT: "Lockheed Martin", UPS: "UPS", HD: "Home Depot",
+  PG: "Procter & Gamble", KO: "Coca-Cola", PEP: "PepsiCo", COST: "Costco",
+  WMT: "Walmart", NKE: "Nike", SBUX: "Starbucks", MCD: "McDonald's",
+  TJX: "TJX Companies", LOW: "Lowe's", XOM: "ExxonMobil", CVX: "Chevron",
+  COP: "ConocoPhillips", SLB: "SLB", FCX: "Freeport-McMoRan",
+  NEM: "Newmont", LIN: "Linde", "BRK-B": "Berkshire Hathaway",
+  DIS: "Disney", LRCX: "Lam Research", XLK: "Tech ETF", XLF: "Finance ETF",
+  XLE: "Energy ETF", XLV: "Health ETF", XLI: "Industrial ETF",
 };
+
+function TickerCell({ symbol }: { symbol: string }) {
+  const name = TICKER_NAMES[symbol];
+  return (
+    <div>
+      <div className="font-medium">{symbol}</div>
+      {name && <div className="text-xs text-zinc-400">{name}</div>}
+    </div>
+  );
+}
 
 function fmtMoney(v?: number | null) {
   if (v === null || v === undefined || Number.isNaN(v)) return "—";
@@ -131,49 +157,81 @@ function PnlCard({
   );
 }
 
-function parseTradesFromMarkdown(md: string): Trade[] {
-  const sectionMatch = md.match(/## Trades de hoy([\s\S]*?)(## |$)/);
+/** Lee solo el header de latest.md para extraer la fecha del último reporte.
+ *  Línea 1 del archivo: "# Reporte diario — YYYY-MM-DD" (formato muy estable).
+ *  Si el archivo no existe o no matchea, retorna null de forma segura.
+ */
+async function getLastReportDate(): Promise<string | null> {
+  try {
+    const md = await readFile("/home/ubuntu/quant-bot/reports/latest.md", "utf8");
+    const match = md.match(/^# Reporte diario — (\d{4}-\d{2}-\d{2})/m);
+    return match ? match[1] : null;
+  } catch {
+    return null;
+  }
+}
+
+type Position = {
+  symbol: string;
+  shares: number;
+  avgPrice: number;
+  close: number | null;
+  mv: number | null;
+  pnlPct: number | null;
+};
+
+function parsePositionsFromMarkdown(md: string): Position[] {
+  const sectionMatch = md.match(/## Posiciones actuales([\s\S]*?)(## |$)/);
   if (!sectionMatch) return [];
 
-  const section = sectionMatch[1];
-
-  const lines = section
+  const lines = sectionMatch[1]
     .split("\n")
     .map((l) => l.trim())
     .filter((l) => l.startsWith("-"));
 
-  const trades: Trade[] = [];
+  const NUM = "([+-]?[\\d.]+|nan)";
+  const re = new RegExp(
+    `- \\*\\*([A-Z0-9.\\-]+)\\*\\*:\\s+([\\d.]+)\\s+sh\\s+\\|\\s+avg\\s+([\\d.]+)\\s+\\|\\s+close\\s+${NUM}\\s+\\|\\s+mv\\s+${NUM}\\s+\\|\\s+pnl\\s+${NUM}%`
+  );
 
+  const positions: Position[] = [];
   for (const line of lines) {
-    if (line.includes("(sin trades hoy)")) continue;
-
-    const match = line.match(
-      /- \*\*(BUY|SELL)\s+([A-Z0-9.\-]+)\*\*\s+\|\s+shares\s+([\d.]+)\s+\|\s+close\s+([\d.]+)\s+\|\s+eff\s+([\d.]+)\s+\|\s+(.+)$/
-    );
-
+    if (line.includes("(sin posiciones)")) continue;
+    const match = line.match(re);
     if (!match) continue;
-
-    trades.push({
-      side: match[1],
-      symbol: match[2],
-      shares: Number(match[3]),
-      close: Number(match[4]),
-      effective: Number(match[5]),
-      reason: match[6],
+    const parseNum = (s: string) => (s === "nan" ? null : Number(s));
+    positions.push({
+      symbol: match[1],
+      shares: Number(match[2]),
+      avgPrice: Number(match[3]),
+      close: parseNum(match[4]),
+      mv: parseNum(match[5]),
+      pnlPct: parseNum(match[6]),
     });
   }
-
-  return trades;
+  return positions;
 }
 
-async function getLatestTrades(): Promise<Trade[]> {
+async function getCurrentPositions(): Promise<Position[]> {
   try {
-    const md = await readFile("/home/ubuntu/n8n-files/latest.md", "utf8");
-    return parseTradesFromMarkdown(md);
+    const md = await readFile("/home/ubuntu/quant-bot/reports/latest.md", "utf8");
+    return parsePositionsFromMarkdown(md);
   } catch {
     return [];
   }
 }
+
+type TradeLog = {
+  id: number;
+  date: string;
+  symbol: string;
+  side: string;
+  shares: number;
+  price_close: number;
+  price_effective: number;
+  value: number;
+  reason: string;
+};
 
 export default async function Page() {
   const res = await fetch("http://localhost:3000/api/history", {
@@ -190,7 +248,37 @@ export default async function Page() {
   const last = sorted.length ? sorted[sorted.length - 1] : null;
   const equity = last?.equityPost ?? last?.equityPre ?? null;
 
-  const trades = await getLatestTrades();
+  const positions = await getCurrentPositions();
+
+  const tradesRes = await fetch("http://localhost:3000/api/trades", {
+    cache: "no-store",
+  });
+  const tradesJson = await tradesRes.json();
+  const tradesLog: TradeLog[] = tradesJson?.data || [];
+
+  // Trades del último reporte: leer solo el header de latest.md para obtener
+  // la fecha, luego filtrar el histórico estructurado. Evita parsear líneas
+  // de markdown y garantiza que ambas tablas usan la misma fuente de datos.
+  const lastReportDate = await getLastReportDate();
+  const lastReportTrades = lastReportDate
+    ? tradesLog.filter((t) => t.date === lastReportDate)
+    : [];
+
+  // Calcular PnL para cada SELL cruzando con el BUY anterior del mismo símbolo
+  const buyPriceMap: Record<string, number> = {};
+  const tradesAsc = [...tradesLog].sort((a, b) => a.date.localeCompare(b.date));
+  tradesAsc.forEach((t) => {
+    if (t.side === "BUY") buyPriceMap[t.symbol] = t.price_effective;
+  });
+  const pnlMap: Record<number, { abs: number; pct: number }> = {};
+  tradesAsc.forEach((t) => {
+    if (t.side === "SELL" && buyPriceMap[t.symbol] != null) {
+      const buyPrice = buyPriceMap[t.symbol];
+      const pnlAbs = (t.price_effective - buyPrice) * t.shares;
+      const pnlPct = (t.price_effective / buyPrice - 1) * 100;
+      pnlMap[t.id] = { abs: pnlAbs, pct: pnlPct };
+    }
+  });
 
   const initialCapital = 100000;
 
@@ -225,9 +313,17 @@ export default async function Page() {
             </p>
           </div>
 
-          <div className="flex items-center gap-2">
-            <span className="text-sm text-zinc-600">Último slot:</span>
-            <SlotPill slot={last?.slot} />
+          <div className="flex items-center gap-4">
+            <div className="flex items-center gap-2">
+              <span className="text-sm text-zinc-600">Último slot:</span>
+              <SlotPill slot={last?.slot} />
+            </div>
+            <Link
+              href="/backtest"
+              className="rounded-full bg-zinc-900 px-4 py-1.5 text-xs font-semibold text-white hover:bg-zinc-700 transition-colors"
+            >
+              Ver Backtest
+            </Link>
           </div>
         </div>
 
@@ -245,13 +341,59 @@ export default async function Page() {
         </div>
 
         <div className="mt-6 rounded-2xl bg-white p-4 shadow-sm ring-1 ring-zinc-200">
+          <div className="mb-4 text-sm font-medium text-zinc-900">Posiciones actuales</div>
+
+          {positions.length === 0 ? (
+            <div className="text-sm text-zinc-500">Sin posiciones abiertas.</div>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead className="text-left text-xs text-zinc-500">
+                  <tr>
+                    <th className="pb-2 pr-4">Ticker</th>
+                    <th className="pb-2 pr-4">Shares</th>
+                    <th className="pb-2 pr-4">Precio medio</th>
+                    <th className="pb-2 pr-4">Close actual</th>
+                    <th className="pb-2 pr-4">Valor (USD)</th>
+                    <th className="pb-2">PnL</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {positions.map((p) => {
+                    const pnlAbs = p.close != null ? (p.close - p.avgPrice) * p.shares : null;
+                    const tone = p.pnlPct == null ? "text-zinc-500" : p.pnlPct >= 0 ? "text-emerald-600" : "text-rose-600";
+                    return (
+                      <tr key={p.symbol} className="border-t border-zinc-100">
+                        <td className="py-2 pr-4"><TickerCell symbol={p.symbol} /></td>
+                        <td className="py-2 pr-4">{fmtNum(p.shares, 4)}</td>
+                        <td className="py-2 pr-4">{fmtNum(p.avgPrice, 2)}</td>
+                        <td className="py-2 pr-4">{fmtNum(p.close, 2)}</td>
+                        <td className="py-2 pr-4">{fmtMoney(p.mv)}</td>
+                        <td className={`py-2 font-medium ${tone}`}>
+                          {pnlAbs != null && p.pnlPct != null
+                            ? `${pnlAbs >= 0 ? "+" : ""}${fmtMoney(pnlAbs)} (${p.pnlPct >= 0 ? "+" : ""}${fmtNum(p.pnlPct, 2)}%)`
+                            : "—"}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+
+        <div className="mt-6 rounded-2xl bg-white p-4 shadow-sm ring-1 ring-zinc-200">
           <div className="mb-4 text-sm font-medium text-zinc-900">
             Operaciones del último reporte
+            {lastReportDate && (
+              <span className="ml-2 text-xs font-normal text-zinc-400">{lastReportDate}</span>
+            )}
           </div>
 
-          {trades.length === 0 ? (
+          {lastReportTrades.length === 0 ? (
             <div className="text-sm text-zinc-500">
-              Sin operaciones en este slot.
+              {lastReportDate ? "Sin operaciones en este reporte." : "No hay datos del último reporte."}
             </div>
           ) : (
             <div className="overflow-x-auto">
@@ -263,19 +405,21 @@ export default async function Page() {
                     <th className="pb-2 pr-4">Shares</th>
                     <th className="pb-2 pr-4">Close</th>
                     <th className="pb-2 pr-4">Precio efectivo</th>
+                    <th className="pb-2 pr-4">Valor (USD)</th>
                     <th className="pb-2">Motivo</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {trades.map((t, i) => (
-                    <tr key={`${t.symbol}-${i}`} className="border-t border-zinc-100">
+                  {lastReportTrades.map((t) => (
+                    <tr key={t.id} className="border-t border-zinc-100">
                       <td className="py-2 pr-4">
                         <SidePill side={t.side} />
                       </td>
-                      <td className="py-2 pr-4 font-medium">{t.symbol}</td>
+                      <td className="py-2 pr-4"><TickerCell symbol={t.symbol} /></td>
                       <td className="py-2 pr-4">{fmtNum(t.shares, 4)}</td>
-                      <td className="py-2 pr-4">{fmtNum(t.close, 2)}</td>
-                      <td className="py-2 pr-4">{fmtNum(t.effective, 2)}</td>
+                      <td className="py-2 pr-4">{fmtNum(t.price_close, 2)}</td>
+                      <td className="py-2 pr-4">{fmtNum(t.price_effective, 2)}</td>
+                      <td className="py-2 pr-4">{fmtMoney(t.value)}</td>
                       <td className="py-2">{t.reason}</td>
                     </tr>
                   ))}
@@ -286,7 +430,61 @@ export default async function Page() {
         </div>
 
         <div className="mt-6 rounded-2xl bg-white p-4 shadow-sm ring-1 ring-zinc-200">
-          <div className="mb-4 text-sm font-medium text-zinc-900">Historial</div>
+          <div className="mb-4 text-sm font-medium text-zinc-900">Histórico de operaciones</div>
+
+          {tradesLog.length === 0 ? (
+            <div className="text-sm text-zinc-500">Sin operaciones registradas.</div>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead className="text-left text-xs text-zinc-500">
+                  <tr>
+                    <th className="pb-2 pr-4">Fecha</th>
+                    <th className="pb-2 pr-4">Acción</th>
+                    <th className="pb-2 pr-4">Ticker</th>
+                    <th className="pb-2 pr-4">Shares</th>
+                    <th className="pb-2 pr-4">Close</th>
+                    <th className="pb-2 pr-4">Precio efectivo</th>
+                    <th className="pb-2 pr-4">Valor (USD)</th>
+                    <th className="pb-2 pr-4">PnL</th>
+                    <th className="pb-2">Motivo</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {tradesLog.map((t) => {
+                    const pnl = pnlMap[t.id];
+                    return (
+                    <tr key={t.id} className="border-t border-zinc-100">
+                      <td className="py-2 pr-4 text-zinc-500">{t.date}</td>
+                      <td className="py-2 pr-4">
+                        <SidePill side={t.side} />
+                      </td>
+                      <td className="py-2 pr-4"><TickerCell symbol={t.symbol} /></td>
+                      <td className="py-2 pr-4">{fmtNum(t.shares, 4)}</td>
+                      <td className="py-2 pr-4">{fmtNum(t.price_close, 2)}</td>
+                      <td className="py-2 pr-4">{fmtNum(t.price_effective, 2)}</td>
+                      <td className="py-2 pr-4">{fmtMoney(t.value)}</td>
+                      <td className="py-2 pr-4">
+                        {pnl != null ? (
+                          <span className={pnl.abs >= 0 ? "text-emerald-600 font-medium" : "text-rose-600 font-medium"}>
+                            {pnl.abs >= 0 ? "+" : ""}{fmtMoney(pnl.abs)} ({pnl.abs >= 0 ? "+" : ""}{fmtNum(pnl.pct, 2)}%)
+                          </span>
+                        ) : (
+                          <span className="text-zinc-400">—</span>
+                        )}
+                      </td>
+                      <td className="py-2">{t.reason}</td>
+                    </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+
+        <div className="mt-6 rounded-2xl bg-white p-4 shadow-sm ring-1 ring-zinc-200">
+          <div className="mb-4 text-sm font-medium text-zinc-900">Historial de equity</div>
 
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
