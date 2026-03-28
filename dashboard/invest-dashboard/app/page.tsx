@@ -233,17 +233,32 @@ type TradeLog = {
   reason: string;
 };
 
-const BASE_URL = process.env.VERCEL_URL
-  ? `https://${process.env.VERCEL_URL}`
-  : "http://localhost:3000";
+const EC2_API = process.env.EC2_API_URL ?? "http://13.61.27.226/api";
+
+async function fetchHistory(): Promise<Snapshot[]> {
+  try {
+    const res = await fetch(`${EC2_API}/history`, { cache: "no-store" });
+    if (!res.ok) return [];
+    const data = await res.json();
+    return Array.isArray(data) ? data : [];
+  } catch {
+    return [];
+  }
+}
+
+async function fetchTrades(): Promise<TradeLog[]> {
+  try {
+    const res = await fetch(`${EC2_API}/trades`, { cache: "no-store" });
+    if (!res.ok) return [];
+    const data = await res.json();
+    return Array.isArray(data) ? data : [];
+  } catch {
+    return [];
+  }
+}
 
 export default async function Page() {
-  const res = await fetch(`${BASE_URL}/api/history`, {
-    cache: "no-store",
-  });
-
-  const json = await res.json();
-  const data: Snapshot[] = json?.data || [];
+  const data: Snapshot[] = await fetchHistory();
 
   const sorted = [...data].sort(
     (a, b) => new Date(a.ts).getTime() - new Date(b.ts).getTime()
@@ -254,11 +269,7 @@ export default async function Page() {
 
   const positions = await getCurrentPositions();
 
-  const tradesRes = await fetch(`${BASE_URL}/api/trades`, {
-    cache: "no-store",
-  });
-  const tradesJson = await tradesRes.json();
-  const tradesLog: TradeLog[] = tradesJson?.data || [];
+  const tradesLog: TradeLog[] = await fetchTrades();
 
   // Trades del último reporte: leer solo el header de latest.md para obtener
   // la fecha, luego filtrar el histórico estructurado. Evita parsear líneas
