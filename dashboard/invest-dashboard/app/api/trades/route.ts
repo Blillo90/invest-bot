@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 
-const EC2_API = process.env.EC2_API_URL ?? "http://13.61.27.226:5000";
+const EC2_API = process.env.EC2_API_URL ?? "http://13.61.27.226/api";
 
 export async function GET() {
   try {
