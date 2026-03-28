@@ -253,7 +253,7 @@ export default function BacktestPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [activeVariants, setActiveVariants] = useState<Set<string>>(
-    new Set(["current_bot", "fill_to_target", "improved", "spy", "acwi"])
+    new Set(["current_bot", "fill_to_target", "improved", "bottest2", "spy", "acwi"])
   );
 
   useEffect(() => {
@@ -348,8 +348,8 @@ export default function BacktestPage() {
           </h1>
           <p className="mt-1 text-sm text-zinc-500">
             Periodo: {data.period.start} al {data.period.end} &nbsp;·&nbsp;{" "}
-            {data.period.trading_days} días de trading &nbsp;·&nbsp; 5 variantes
-            comparadas &nbsp;·&nbsp; Capital inicial: $100,000
+            {data.period.trading_days} días de trading &nbsp;·&nbsp;{" "}
+            {data.variants.length} variantes comparadas &nbsp;·&nbsp; Capital inicial: $100,000
           </p>
         </div>
 
