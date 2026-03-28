@@ -253,7 +253,7 @@ export default function BacktestPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [activeVariants, setActiveVariants] = useState<Set<string>>(
-    new Set(["current_bot", "fill_to_target", "improved", "bottest2", "ema_sma_bollinger", "spy", "acwi"])
+    new Set(["current_bot", "improved", "bottest2", "ema_sma_bollinger", "ema_sma_bollinger_v2", "spy", "acwi"])
   );
 
   useEffect(() => {
