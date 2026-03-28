@@ -239,7 +239,8 @@ async function fetchHistory(): Promise<Snapshot[]> {
   try {
     const res = await fetch(`${EC2_API}/history`, { cache: "no-store" });
     if (!res.ok) return [];
-    const data = await res.json();
+    const raw = await res.json();
+    const data = Array.isArray(raw) ? raw : (raw?.data ?? []);
     return Array.isArray(data) ? data : [];
   } catch {
     return [];
@@ -250,7 +251,8 @@ async function fetchTrades(): Promise<TradeLog[]> {
   try {
     const res = await fetch(`${EC2_API}/trades`, { cache: "no-store" });
     if (!res.ok) return [];
-    const data = await res.json();
+    const raw = await res.json();
+    const data = Array.isArray(raw) ? raw : (raw?.data ?? []);
     return Array.isArray(data) ? data : [];
   } catch {
     return [];
