@@ -43,7 +43,7 @@ def _append_snapshot(mode: str):
         "equityPre": _num(pick(r"Equity \(pre\): \*\*([0-9.]+)\*\*")),
         "equityPost": _num(pick(r"Equity \(post\): \*\*([0-9.]+)\*\*")),
         "cash": _num(pick(r"Cash: \*\*([0-9.]+)\*\*")),
-        "exposurePct": _num(pick(r"Exposición: \*\*([-0-9.]+)%\*\*")),
+        "exposurePct": _num(pick(r"Exposición[^:]*: \*\*([-0-9.]+)%\*\*")),
         "drawdownPct": _num(pick(r"Drawdown \(vs pico\): \*\*([-0-9.]+)%\*\*")),
         "targetPerPos": _num(pick(r"Target por posición .*?: \*\*([0-9.]+)\*\*")),
     }

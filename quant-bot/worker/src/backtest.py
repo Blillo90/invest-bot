@@ -22,6 +22,22 @@ import numpy as np
 import pandas as pd
 import yfinance as yf
 
+# ── Shared strategy logic (canonical) ─────────────────────────────────────
+# All feature computation, scoring, and stop logic lives here.
+from strategy.core import (
+    compute_features_df,
+    rank_pct,
+    compute_momentum_score,
+    compute_momentum_score_v2,
+    is_trend_ok_strict,
+    is_trend_ok_relaxed,
+    check_atr_stop,
+    target_position_size,
+    compute_metrics,
+    compute_annual_returns,
+    sanitize,
+)
+
 # ─── Paths ────────────────────────────────────────────────────────────────────
 SCRIPT_DIR  = Path(__file__).parent
 REPO_ROOT   = SCRIPT_DIR.parent.parent.parent
@@ -101,22 +117,31 @@ UNIVERSE = list(dict.fromkeys(UNIVERSE))
 BENCHMARKS      = ["SPY", "ACWI"]
 ALL_DOWNLOAD    = list(dict.fromkeys(UNIVERSE + BENCHMARKS))
 
-# ─── Global parameters ────────────────────────────────────────────────────────
+# ─── Global parameters (env-aware — read from bot.env when MODE=backtest) ────
+# These defaults mirror the run_daily.py Config defaults so both stay in sync.
+def _envf(k: str, d: float) -> float:
+    try:    return float(os.getenv(k, str(d)))
+    except: return d
+
+def _envi(k: str, d: int) -> int:
+    try:    return int(os.getenv(k, str(d)))
+    except: return d
+
 DOWNLOAD_START       = "2022-07-01"
 BACKTEST_START       = "2023-01-03"
 BACKTEST_END         = "2026-03-27"
-START_CASH           = 100_000.0
-FEE_TOTAL            = 20 / 10_000.0       # 20 bps (fee + slippage)
-MAX_POSITIONS        = 12
-MAX_EXPOSURE         = 0.95
-BEAR_MAX_EXPOSURE    = 0.50
-MIN_POSITION_USD     = 1_000.0
-MAX_REPLACEMENTS     = 6
-ATR_STOP_MULT        = 2.5
-ATR_TRAIL_MULT       = 3.0
-MIN_HISTORY_DAYS     = 252                  # minimo historial antes de operar
-MIN_DOLLAR_VOL       = 5_000_000.0          # $5M daily avg vol minimo
-TOP_N_LIQUIDITY      = 150                  # top N por liquidez para el ranking activo
+START_CASH           = _envf("START_CASH",        100_000.0)
+FEE_TOTAL            = (_envf("FEE_BPS", 10) + _envf("SLIPPAGE_BPS", 10)) / 10_000.0
+MAX_POSITIONS        = _envi("MAX_POSITIONS",     12)
+MAX_EXPOSURE         = _envf("MAX_EXPOSURE_PCT",  0.95)
+BEAR_MAX_EXPOSURE    = 0.50                 # fixed risk rule, not configurable
+MIN_POSITION_USD     = _envf("MIN_POSITION_USD",  1_000.0)
+MAX_REPLACEMENTS     = _envi("MAX_REPLACEMENTS_PER_DAY", 6)
+ATR_STOP_MULT        = _envf("ATR_STOP_MULT",     2.5)
+ATR_TRAIL_MULT       = _envf("ATR_TRAIL_MULT",    3.0)
+MIN_HISTORY_DAYS     = 252
+MIN_DOLLAR_VOL       = 5_000_000.0
+TOP_N_LIQUIDITY      = 150
 
 
 # ─── Variant configs ──────────────────────────────────────────────────────────
@@ -129,14 +154,32 @@ class VariantConfig:
     sell_out_pct:       float = 0.20
     fill_to_target:     bool  = False
     fill_relaxed_trend: bool  = False
+    # ── BotTest2 extensions ────────────────────────────────────────────────
+    use_score_v2:       bool  = False  # quality-adjusted scoring (v2 formula)
+    trend_exit:         bool  = False  # exit held position if close < SMA50
+    vol_weighted_size:  bool  = False  # scale position size inversely with vol_20
 
 STRATEGY_VARIANTS = [
+    # current_bot: exact live-bot parameters from env (or defaults matching run_daily.py)
     VariantConfig("current_bot",    "Current Bot",    "#6366f1",
-                  buy_top_pct=0.07, sell_out_pct=0.20, fill_to_target=False),
+                  buy_top_pct=_envf("BUY_TOP_PCT",  0.07),
+                  sell_out_pct=_envf("SELL_OUT_PCT", 0.20),
+                  fill_to_target=False),
     VariantConfig("fill_to_target", "Fill-to-Target", "#f59e0b",
-                  buy_top_pct=0.07, sell_out_pct=0.20, fill_to_target=True,  fill_relaxed_trend=False),
+                  buy_top_pct=_envf("BUY_TOP_PCT",  0.07),
+                  sell_out_pct=_envf("SELL_OUT_PCT", 0.20),
+                  fill_to_target=True, fill_relaxed_trend=False),
     VariantConfig("improved",       "Improved",       "#10b981",
-                  buy_top_pct=0.15, sell_out_pct=0.30, fill_to_target=True,  fill_relaxed_trend=True),
+                  buy_top_pct=0.15, sell_out_pct=0.30,
+                  fill_to_target=True, fill_relaxed_trend=True),
+    # ── BotTest2 ───────────────────────────────────────────────────────────
+    # Quality-adjusted momentum with trend exit and vol-weighted sizing.
+    # Wider buy/hold universe than current_bot, fills to target,
+    # but only enters names with strict uptrend.
+    VariantConfig("bottest2",       "BotTest2",       "#ec4899",
+                  buy_top_pct=0.10, sell_out_pct=0.25,
+                  fill_to_target=True, fill_relaxed_trend=False,
+                  use_score_v2=True, trend_exit=True, vol_weighted_size=True),
 ]
 
 
@@ -169,38 +212,13 @@ def download_prices(tickers: List[str]) -> Dict[str, pd.DataFrame]:
 
 
 # ─── 2. Features ─────────────────────────────────────────────────────────────
-def compute_features(df: pd.DataFrame) -> pd.DataFrame:
-    d = df.copy().sort_index()
-    d["ret_1"]  = d["close"].pct_change()
-    d["ret_5"]  = d["close"].pct_change(5)
-    d["ret_10"] = d["close"].pct_change(10)
-    d["ret_20"] = d["close"].pct_change(20)
-    d["vol_20"] = d["ret_1"].rolling(20).std()
-
-    pc  = d["close"].shift(1)
-    tr  = pd.concat([
-        (d["high"] - d["low"]).abs(),
-        (d["high"] - pc).abs(),
-        (d["low"]  - pc).abs(),
-    ], axis=1).max(axis=1)
-    d["atr_14"]       = tr.rolling(14).mean()
-    vm                = d["volume"].rolling(20).mean()
-    vs                = d["volume"].rolling(20).std().replace(0, np.nan)
-    d["vol_z_20"]     = (d["volume"] - vm) / vs
-    d["dollar_vol_20"]= (d["close"] * d["volume"]).rolling(20).mean()
-    d["sma_50"]       = d["close"].rolling(50).mean()
-    d["sma_100"]      = d["close"].rolling(100).mean()
-    d["sma_200"]      = d["close"].rolling(200).mean()
-
-    return d.dropna(subset=["ret_20","vol_20","atr_14","sma_50","sma_100"])
-
-
 def build_features_panel(prices: Dict[str, pd.DataFrame]) -> Dict[str, pd.DataFrame]:
+    """Compute features for all tickers using the canonical strategy.core function."""
     print("[2/5] Computing features...")
     out: Dict[str, pd.DataFrame] = {}
     for sym, df in prices.items():
         try:
-            ft = compute_features(df)
+            ft = compute_features_df(df)   # canonical — from strategy.core
             if not ft.empty:
                 out[sym] = ft
         except Exception:
@@ -247,10 +265,6 @@ def get_trading_dates(features: Dict[str, pd.DataFrame]) -> pd.DatetimeIndex:
 
 
 # ─── 4. Signals (vectorized per day) ─────────────────────────────────────────
-def rank_pct(s: pd.Series) -> pd.Series:
-    return s.rank(pct=True)
-
-
 def get_liquid_universe(
     day_data: DayLookup,
     top_n: int = TOP_N_LIQUIDITY,
@@ -277,19 +291,25 @@ def spy_bull_regime(day_data: DayLookup) -> bool:
 
 
 def score_universe(
-    day_data: DayLookup,
+    day_data:    DayLookup,
     liquid_syms: List[str],
+    use_v2:      bool = False,
 ) -> pd.DataFrame:
-    """Compute momentum score for the liquid universe on a given day."""
+    """
+    Compute momentum score for the liquid universe on a given day.
+
+    use_v2=True selects the quality-adjusted BotTest2 formula.
+    use_v2=False (default) keeps the original formula for existing variants.
+    """
     rows = []
     for sym in liquid_syms:
         d = day_data[sym]
         vol20 = d["vol_20"] if not math.isnan(d["vol_20"]) and d["vol_20"] > 0 else 0.01
         rows.append({
             "symbol":  sym,
-            "ret_5":   d["ret_5"]   if not math.isnan(d["ret_5"])   else 0.0,
-            "ret_10":  d["ret_10"]  if not math.isnan(d["ret_10"])  else 0.0,
-            "ret_20":  d["ret_20"]  if not math.isnan(d["ret_20"])  else 0.0,
+            "ret_5":   d["ret_5"]    if not math.isnan(d["ret_5"])    else 0.0,
+            "ret_10":  d["ret_10"]   if not math.isnan(d["ret_10"])   else 0.0,
+            "ret_20":  d["ret_20"]   if not math.isnan(d["ret_20"])   else 0.0,
             "vol_20":  vol20,
             "vol_z_20": d["vol_z_20"] if not math.isnan(d["vol_z_20"]) else 0.0,
             "sma_50":  d["sma_50"],
@@ -300,15 +320,8 @@ def score_universe(
         return pd.DataFrame()
 
     df = pd.DataFrame(rows)
-    quality = df["ret_20"] / df["vol_20"].replace(0, np.nan)
-    df["score"] = (
-        0.60 * rank_pct(df["ret_20"].fillna(0))
-      + 0.25 * rank_pct(df["ret_10"].fillna(0))
-      + 0.15 * rank_pct(df["ret_5"].fillna(0))
-      - 0.15 * rank_pct(df["vol_20"])
-      + 0.15 * rank_pct(quality.fillna(0))
-      + 0.10 * rank_pct(df["vol_z_20"].fillna(0))
-    )
+    score_fn = compute_momentum_score_v2 if use_v2 else compute_momentum_score
+    df["score"] = score_fn(df)
     return df.sort_values("score", ascending=False).reset_index(drop=True)
 
 
@@ -319,7 +332,8 @@ def generate_signals(
     portfolio:  Set[str],
     eff_max_exp: float,
 ) -> Tuple[List[str], List[str], List[str]]:
-    df = score_universe(day_data, liquid_syms)
+    # Score universe with the formula selected by cfg (v1 or v2)
+    df = score_universe(day_data, liquid_syms, use_v2=cfg.use_score_v2)
     if df.empty:
         return [], [], []
 
@@ -330,36 +344,54 @@ def generate_signals(
     buy_set  = set(df.head(buy_cut)["symbol"])
     hold_set = set(df.head(sell_cut)["symbol"])
 
+    # Trend filters — canonical from strategy.core
     def strict_trend(sym: str) -> bool:
         d = day_data.get(sym, {})
-        s50, s100, c = d.get("sma_50", float("nan")), d.get("sma_100", float("nan")), d.get("close", float("nan"))
-        if math.isnan(s50) or math.isnan(s100) or math.isnan(c):
-            return False
-        return c > s50 and s50 > s100
+        return is_trend_ok_strict(
+            d.get("close", float("nan")),
+            d.get("sma_50", float("nan")),
+            d.get("sma_100", float("nan")),
+        )
 
     def relaxed_trend(sym: str) -> bool:
         d = day_data.get(sym, {})
-        s100, c = d.get("sma_100", float("nan")), d.get("close", float("nan"))
-        if math.isnan(s100) or math.isnan(c):
-            return False
-        return c > s100
+        return is_trend_ok_relaxed(
+            d.get("close", float("nan")),
+            d.get("sma_100", float("nan")),
+        )
 
-    trend_strict  = {s for s in df["symbol"] if strict_trend(s)}
-    trend_relaxed = {s for s in df["symbol"] if relaxed_trend(s)}
+    trend_strict_set  = {s for s in df["symbol"] if strict_trend(s)}
+    trend_relaxed_set = {s for s in df["symbol"] if relaxed_trend(s)}
 
     buy_primary = (
-        df[df["symbol"].isin((buy_set & trend_strict) - portfolio)]
+        df[df["symbol"].isin((buy_set & trend_strict_set) - portfolio)]
         .head(MAX_REPLACEMENTS)["symbol"].tolist()
     )
 
+    # Rank-based sells: positions that dropped out of hold_set
     to_sell = (
         df[df["symbol"].isin(portfolio - hold_set)]
-        .sort_values("score", ascending=True)["symbol"].tolist()[:MAX_REPLACEMENTS]
+        .sort_values("score", ascending=True)["symbol"].tolist()
     )
+
+    # BotTest2 — trend exit: sell held positions that have broken their uptrend
+    # (close < SMA50), even if still inside the hold_set ranking threshold.
+    if cfg.trend_exit:
+        already_selling = set(to_sell)
+        for sym in portfolio:
+            if sym in already_selling:
+                continue
+            d = day_data.get(sym, {})
+            c   = d.get("close",  float("nan"))
+            s50 = d.get("sma_50", float("nan"))
+            if not math.isnan(c) and not math.isnan(s50) and c < s50:
+                to_sell.append(sym)
+
+    to_sell = to_sell[:MAX_REPLACEMENTS]
 
     buy_fill: List[str] = []
     if cfg.fill_to_target:
-        trend_for_fill = trend_relaxed if cfg.fill_relaxed_trend else trend_strict
+        trend_for_fill = trend_relaxed_set if cfg.fill_relaxed_trend else trend_strict_set
         fill_pool = trend_for_fill - portfolio - set(buy_primary)
         buy_fill = df[df["symbol"].isin(fill_pool)]["symbol"].tolist()
 
@@ -415,19 +447,18 @@ def simulate_variant(
             if not math.isnan(p) and p > pos.highest:
                 pos.highest = p
 
-        # 2. ATR stops
+        # 2. ATR stops (canonical — via strategy.core.check_atr_stop)
         to_stop: List[str] = []
         for sym, pos in portfolio.items():
             d = day_data.get(sym, {})
             p = d.get("close", float("nan"))
-            if math.isnan(p):
+            if math.isnan(p) or pos.entry_atr is None:
                 continue
-            atr = pos.entry_atr
-            if atr is None or atr <= 0:
-                continue
-            if p <= pos.avg_price - ATR_STOP_MULT * atr:
-                to_stop.append(sym)
-            elif p <= pos.highest - ATR_TRAIL_MULT * atr:
+            triggered, _ = check_atr_stop(
+                p, pos.avg_price, pos.highest, pos.entry_atr,
+                ATR_STOP_MULT, ATR_TRAIL_MULT,
+            )
+            if triggered:
                 to_stop.append(sym)
 
         for sym in to_stop:
@@ -467,8 +498,20 @@ def simulate_variant(
             p = day_data.get(sym, {}).get("close", float("nan"))
             if math.isnan(p) or p <= 0:
                 return False
-            eq    = portfolio_value(portfolio, day_data, cash)
-            target = (eq * eff_max_exp) / MAX_POSITIONS
+            eq     = portfolio_value(portfolio, day_data, cash)
+            target = target_position_size(eq, eff_max_exp, MAX_POSITIONS)
+
+            # BotTest2 — vol-weighted sizing:
+            # Scale position down for high-volatility names (and slightly up
+            # for low-vol), bounded within [0.5×, 1.5×] of equal weight.
+            # Reference daily vol ~1.5% (≈ 24% annualised, a broad market proxy).
+            if cfg.vol_weighted_size:
+                sym_vol = day_data.get(sym, {}).get("vol_20", float("nan"))
+                if not math.isnan(sym_vol) and sym_vol > 0:
+                    REF_VOL = 0.015
+                    scale   = min(1.5, max(0.5, REF_VOL / sym_vol))
+                    target  = target * scale
+
             if target < MIN_POSITION_USD:
                 return False
             eff   = p * (1.0 + FEE_TOTAL)
@@ -516,12 +559,15 @@ def simulate_variant(
 
     metrics = compute_metrics(equity_curve, drawdown_curve, exposure_curve, trades_log)
     return {
-        "id": cfg.id, "label": cfg.label, "color": cfg.color,
-        "metrics": metrics,
+        "id":             cfg.id,
+        "label":          cfg.label,
+        "color":          cfg.color,
+        "metrics":        metrics,
         "annual_returns": compute_annual_returns(equity_curve),
-        "equity_curve": equity_curve,
+        "equity_curve":   equity_curve,
         "drawdown_curve": drawdown_curve,
         "exposure_curve": exposure_curve,
+        "trades":         trades_log,   # included for audit / dashboard
     }
 
 
@@ -660,75 +706,74 @@ def simulate_benchmark(
     }
 
 
-# ─── Metrics ──────────────────────────────────────────────────────────────────
-def _safe(v: float, fallback: float = 0.0) -> float:
-    return round(v, 6) if math.isfinite(v) else fallback
+# ─── Markdown summary ─────────────────────────────────────────────────────────
+def _generate_summary_md(results: List[dict]) -> str:
+    """Generate a human-readable backtest summary report."""
+    by_id = {r["id"]: r for r in results}
+    spy   = by_id.get("spy",  {}).get("metrics", {})
+    acwi  = by_id.get("acwi", {}).get("metrics", {})
 
+    lines = [
+        "# Backtest Summary",
+        f"\n_Generated: {dt.datetime.now(dt.timezone.utc).strftime('%Y-%m-%d %H:%M UTC')}_",
+        f"_Period: {BACKTEST_START} → {BACKTEST_END}_\n",
+        "## Key metrics",
+        "",
+        f"| Strategy | CAGR | Sharpe | Sortino | Max DD | Avg Exp | Trades |",
+        f"|----------|-----:|-------:|--------:|-------:|--------:|-------:|",
+    ]
+    for r in results:
+        m = r["metrics"]
+        lines.append(
+            f"| {r['label']:<22} "
+            f"| {m['cagr']*100:>5.1f}% "
+            f"| {m['sharpe']:>6.2f} "
+            f"| {m['sortino']:>7.2f} "
+            f"| {m['max_drawdown']*100:>6.1f}% "
+            f"| {m['avg_exposure']*100:>6.1f}% "
+            f"| {m['num_trades']:>6} |"
+        )
 
-def compute_metrics(
-    equity_curve: List[dict], drawdown_curve: List[dict],
-    exposure_curve: List[dict], trades_log: List[dict],
-) -> dict:
-    if len(equity_curve) < 2:
-        return {k: 0.0 for k in ["cagr","total_return","volatility","sharpe",
-                                   "sortino","max_drawdown","calmar","avg_exposure","num_trades","win_rate"]}
-    values   = [r["value"] for r in equity_curve]
-    returns  = pd.Series(values).pct_change().dropna()
-    n_days   = len(equity_curve)
-    years    = n_days / 252.0
-    first_v, last_v = values[0], values[-1]
-    total_r  = (last_v / first_v - 1.0) if first_v > 0 else 0.0
-    cagr     = (last_v / first_v) ** (1.0 / max(years, 0.01)) - 1.0 if first_v > 0 else 0.0
-    vol      = float(returns.std() * math.sqrt(252)) if len(returns) > 1 else 0.0
-    rf       = 0.04 / 252
-    excess   = returns - rf
-    sharpe   = float(excess.mean() / excess.std() * math.sqrt(252)) if excess.std() > 0 else 0.0
-    down     = returns[returns < 0]
-    s_denom  = float(down.std() * math.sqrt(252)) if len(down) > 1 else 0.0
-    sortino  = float(excess.mean() * 252 / s_denom) if s_denom > 0 else 0.0
-    max_dd   = min(r["value"] for r in drawdown_curve) / 100.0 if drawdown_curve else 0.0
-    calmar   = abs(cagr / max_dd) if max_dd < 0 else 0.0
-    avg_exp  = float(sum(r["value"] for r in exposure_curve) / len(exposure_curve)) / 100.0 if exposure_curve else 0.0
-    n_trades = len(trades_log)
-    return {
-        "cagr":         _safe(cagr),
-        "total_return": _safe(total_r),
-        "volatility":   _safe(vol),
-        "sharpe":       _safe(sharpe),
-        "sortino":      _safe(sortino),
-        "max_drawdown": _safe(max_dd),
-        "calmar":       _safe(calmar),
-        "avg_exposure": _safe(avg_exp),
-        "num_trades":   n_trades,
-        "win_rate":     0.0,
-    }
+    lines += [
+        "",
+        "## vs Benchmarks (SPY / ACWI buy-and-hold)",
+        "",
+        f"| Benchmark | CAGR | Sharpe | Max DD |",
+        f"|-----------|-----:|-------:|-------:|",
+        f"| SPY  B&H  | {spy.get('cagr', 0)*100:>5.1f}%"
+        f" | {spy.get('sharpe', 0):>6.2f}"
+        f" | {spy.get('max_drawdown', 0)*100:>6.1f}% |",
+        f"| ACWI B&H  | {acwi.get('cagr', 0)*100:>5.1f}%"
+        f" | {acwi.get('sharpe', 0):>6.2f}"
+        f" | {acwi.get('max_drawdown', 0)*100:>6.1f}% |",
+        "",
+        "## Annual returns",
+        "",
+        "| Year |" + "".join(f" {r['label'][:12]:>12} |" for r in results),
+        "|------|" + "".join(f"{'---':>13}:|" for _ in results),
+    ]
 
+    # Collect all years
+    all_years: Set[int] = set()
+    for r in results:
+        for ar in r.get("annual_returns", []):
+            all_years.add(ar["year"])
+    for year in sorted(all_years):
+        row = f"| {year} |"
+        for r in results:
+            ar_map = {x["year"]: x["return"] for x in r.get("annual_returns", [])}
+            v = ar_map.get(year)
+            row += f" {v*100:>11.1f}% |" if v is not None else f" {'N/A':>12} |"
+        lines.append(row)
 
-def compute_annual_returns(equity_curve: List[dict]) -> List[dict]:
-    if not equity_curve:
-        return []
-    df = pd.DataFrame(equity_curve)
-    df["date"] = pd.to_datetime(df["date"])
-    df = df.set_index("date").sort_index()
-    result = []
-    for year in range(df.index[0].year, df.index[-1].year + 1):
-        yr = df[df.index.year == year]
-        if len(yr) < 2:
-            continue
-        start_v, end_v = float(yr.iloc[0]["value"]), float(yr.iloc[-1]["value"])
-        result.append({"year": year, "return": round((end_v / start_v - 1.0) if start_v > 0 else 0.0, 6)})
-    return result
-
-
-# ─── JSON sanitisation ────────────────────────────────────────────────────────
-def sanitize(obj: Any) -> Any:
-    if isinstance(obj, float):
-        return None if not math.isfinite(obj) else obj
-    if isinstance(obj, dict):
-        return {k: sanitize(v) for k, v in obj.items()}
-    if isinstance(obj, list):
-        return [sanitize(v) for v in obj]
-    return obj
+    lines += [
+        "",
+        "---",
+        "_Universe: ~300 US equities + ETFs. "
+        "Strategy: daily momentum with ATR stops. "
+        "Execution: signal at close T, fill at close T (MOC)._",
+    ]
+    return "\n".join(lines) + "\n"
 
 
 # ─── Main ─────────────────────────────────────────────────────────────────────
@@ -772,15 +817,24 @@ def main():
     }
     output = sanitize(output)
 
+    # ── Write JSON (pretty-printed, human-readable) ─────────────────────────
     OUTPUT_PATH.parent.mkdir(parents=True, exist_ok=True)
-    json_str = json.dumps(output, ensure_ascii=False)
-    json.loads(json_str)   # validate
+    json_str = json.dumps(output, ensure_ascii=False, indent=2)
+    json.loads(json_str)   # validate round-trip
 
     with open(OUTPUT_PATH, "w", encoding="utf-8") as f:
         f.write(json_str)
 
+    # ── Write Markdown summary ───────────────────────────────────────────────
+    SUMMARY_PATH = REPO_ROOT / "quant-bot" / "reports" / "backtest_summary.md"
+    SUMMARY_PATH.parent.mkdir(parents=True, exist_ok=True)
+    with open(SUMMARY_PATH, "w", encoding="utf-8") as f:
+        f.write(_generate_summary_md(results))
+
     print()
-    print("[5/5] Results saved to:", OUTPUT_PATH)
+    print("[5/5] Results saved to:")
+    print(f"      JSON:     {OUTPUT_PATH}")
+    print(f"      Summary:  {SUMMARY_PATH}")
     print()
     print(f"{'Variant':<22} {'CAGR':>7} {'Sharpe':>7} {'Sortino':>8} {'MaxDD':>8} {'Exp%':>7}")
     print("-" * 58)

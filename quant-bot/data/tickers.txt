@@ -1,17 +1,4 @@
-# ─── Universo de trading – 150 large/mega-cap líquidos EE.UU. ────────────────
-# Un ticker por línea. Líneas vacías y "#" se ignoran.
-# Criterio de selección:
-#   • S&P 500 / Nasdaq 100 constituents con alta liquidez ($ vol diario > 200 M)
-#   • Cobertura de los 11 sectores GICS
-#   • Datos fiables desde 2020+ en yfinance
-#   • Sin tickers problemáticos (absorciones, sin datos, penny stocks)
-#
-# Con 150 tickers y la config actual del bot:
-#   BUY_TOP_PCT=0.10  → top 15 candidatos de compra
-#   SELL_OUT_PCT=0.30 → bottom 45 en zona de venta
-#   MAX_POSITIONS=20  → hay suficientes candidatos para llenar la cartera
-
-# ── Tecnología (30) ──────────────────────────────────────────────────────────
+# Mega-cap tech
 AAPL
 MSFT
 NVDA
@@ -26,6 +13,8 @@ CRM
 ADBE
 CSCO
 ORCL
+
+# Mid-cap tech / growth
 SNOW
 PLTR
 ANET
@@ -33,17 +22,8 @@ PANW
 FTNT
 NOW
 TTD
-QCOM
-AVGO
-MU
-TXN
-KLAC
-LRCX
-CRWD
-MRVL
-ADSK
 
-# ── Salud / Healthcare (16) ───────────────────────────────────────────────────
+# Healthcare
 UNH
 LLY
 JNJ
@@ -53,15 +33,8 @@ PFE
 AMGN
 ISRG
 TMO
-MDT
-BMY
-CVS
-CI
-ELV
-VRTX
-ABBV
 
-# ── Finanzas (18) ────────────────────────────────────────────────────────────
+# Financieros
 JPM
 BAC
 GS
@@ -72,44 +45,8 @@ AXP
 CB
 V
 MA
-WFC
-C
-USB
-TFC
-PGR
-MET
-ALL
-SCHW
 
-# ── Consumo discrecional (14) ────────────────────────────────────────────────
-HD
-COST
-WMT
-NKE
-SBUX
-MCD
-TJX
-LOW
-BKNG
-CMG
-ROST
-GM
-F
-YUM
-
-# ── Consumo básico / Staples (10) ────────────────────────────────────────────
-PG
-KO
-PEP
-PM
-MO
-CL
-MDLZ
-EL
-KMB
-STZ
-
-# ── Industriales (15) ────────────────────────────────────────────────────────
+# Industriales
 CAT
 DE
 HON
@@ -117,70 +54,37 @@ GE
 RTX
 LMT
 UPS
-BA
-FDX
-MMM
-NOC
-ITW
-EMR
-ETN
-PH
 
-# ── Energía (10) ─────────────────────────────────────────────────────────────
+# Consumo / Retail
+HD
+PG
+KO
+PEP
+COST
+WMT
+NKE
+SBUX
+MCD
+TJX
+LOW
+
+# Energía / Materiales
 XOM
 CVX
 COP
 SLB
-EOG
-PSX
-MPC
-VLO
-OXY
-HAL
-
-# ── Materiales (8) ───────────────────────────────────────────────────────────
-LIN
 FCX
 NEM
-APD
-ECL
-DD
-PPG
-NUE
+LIN
 
-# ── Comunicaciones (7) ───────────────────────────────────────────────────────
-DIS
-T
-VZ
-CMCSA
-CHTR
-EA
-TTWO
-
-# ── Utilities (6) ────────────────────────────────────────────────────────────
-NEE
-DUK
-SO
-AEP
-EXC
-D
-
-# ── Real Estate (5) ──────────────────────────────────────────────────────────
-PLD
-AMT
-EQIX
-SPG
-CCI
-
-# ── Otros large-caps diversificados (11) ─────────────────────────────────────
+# Otros / diversificación
 BRK-B
-ZS
-NET
-SHOP
-UBER
-PYPL
-ICE
-DXCM
-BIIB
-GLD
-CDNS
+DIS
+LRCX
+
+# ETFs sectoriales
+XLK
+XLF
+XLE
+XLV
+XLI

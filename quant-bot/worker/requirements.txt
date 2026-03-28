@@ -1,0 +1,8 @@
+# quant-bot worker dependencies
+# Install: pip install -r requirements.txt
+
+numpy>=1.24.0
+pandas>=2.0.0
+duckdb>=0.9.0
+yfinance>=0.2.40
+flask>=2.3.0

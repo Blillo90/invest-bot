@@ -66,12 +66,23 @@ def simulate_with_prices(con: duckdb.DuckDBPyConnection, cfg: core.Config, signa
     """
     fee = (cfg.fee_bps + cfg.slippage_bps) / 10000.0
 
+    bull_regime = core.get_spy_regime(con)
+    effective_max_exposure = cfg.max_exposure_pct if bull_regime else min(cfg.max_exposure_pct, 0.50)
+
     cash = core.get_last_cash(con, cfg)
-    pos = con.execute("SELECT symbol, shares, avg_price, entry_date FROM positions").df()
+    pos = con.execute("""
+        SELECT symbol, shares, avg_price, entry_date,
+               highest_price_since_entry, atr_at_entry
+        FROM positions
+    """).df()
 
     # close diario por si falta intradía
     prices_eod = con.execute("SELECT symbol, close FROM bars WHERE date = ?", [asof]).df()
     px_eod = dict(zip(prices_eod["symbol"], prices_eod["close"]))
+
+    # ATR del día actual para nuevas posiciones
+    atr_df = con.execute("SELECT symbol, atr_14 FROM features WHERE date = ?", [asof]).df()
+    atr_px = dict(zip(atr_df["symbol"], atr_df["atr_14"])) if not atr_df.empty else {}
 
     def price(sym: str) -> float | None:
         if sym in px_now:
@@ -92,13 +103,9 @@ def simulate_with_prices(con: duckdb.DuckDBPyConnection, cfg: core.Config, signa
 
     equity_pre = cash + exposure
 
-    investable = equity_pre * cfg.max_exposure_pct
-    target_value = investable / cfg.max_positions if cfg.max_positions > 0 else 0.0
-    can_open_new = target_value >= cfg.min_position_usd
-
     trades = []
 
-    # SELL
+    # SELL (solo por ranking — los stops ATR se ejecutan en run_daily al cierre)
     if not signals.empty:
         sells = signals[signals["action"] == "SELL"]
         for _, s in sells.iterrows():
@@ -112,14 +119,30 @@ def simulate_with_prices(con: duckdb.DuckDBPyConnection, cfg: core.Config, signa
             sh = float(row["shares"])
             eff = float(p) * (1.0 - fee)
             cash += sh * eff
-            trades.append({"date": str(asof), "symbol": sym, "side": "SELL", "shares": sh, "price": float(p), "price_effective": eff, "reason": s.get("reason", "")})
+            trades.append({
+                "date": str(asof), "symbol": sym, "side": "SELL",
+                "shares": sh, "price_close": float(p), "price_effective": eff,
+                "reason": s.get("reason", ""), "is_stop": False
+            })
             con.execute("DELETE FROM positions WHERE symbol = ?", [sym])
 
-    pos = con.execute("SELECT symbol, shares, avg_price, entry_date FROM positions").df()
+    # Recalcular equity/exposición tras ventas para sizing correcto
+    pos_now = con.execute("SELECT symbol, shares FROM positions").df()
+    exposure_now = 0.0
+    if not pos_now.empty:
+        for _, r in pos_now.iterrows():
+            p = price(r["symbol"])
+            if p is not None:
+                exposure_now += float(r["shares"]) * p
+    equity_now = cash + exposure_now
+    cur_n = 0 if pos_now.empty else len(pos_now)
+
+    # Sizing igual que run_daily: equal-weight sobre capital invertible
+    target_per_pos = (equity_now * effective_max_exposure) / cfg.max_positions if cfg.max_positions > 0 else 0.0
+    can_open_new = target_per_pos >= cfg.min_position_usd
 
     # BUY
     if can_open_new and not signals.empty:
-        cur_n = 0 if pos.empty else len(pos)
         slots = max(0, cfg.max_positions - cur_n)
         buys = signals[signals["action"] == "BUY"].head(slots)
 
@@ -128,35 +151,45 @@ def simulate_with_prices(con: duckdb.DuckDBPyConnection, cfg: core.Config, signa
             p = price(sym)
             if p is None:
                 continue
+            already = con.execute("SELECT 1 FROM positions WHERE symbol = ?", [sym]).fetchone()
+            if already:
+                continue
             eff = float(p) * (1.0 + fee)
-            shares = target_value / eff
+            shares = target_per_pos / eff
             cost = shares * eff
             if cost > cash:
                 continue
             cash -= cost
+            atr_entry = core._safe_float(atr_px.get(sym))
             con.execute("""
-              INSERT INTO positions(symbol, shares, avg_price, entry_date)
-              VALUES(?, ?, ?, ?)
+              INSERT INTO positions(symbol, shares, avg_price, entry_date,
+                                   highest_price_since_entry, atr_at_entry)
+              VALUES(?, ?, ?, ?, ?, ?)
               ON CONFLICT(symbol) DO UPDATE SET
                 shares=excluded.shares,
                 avg_price=excluded.avg_price,
-                entry_date=excluded.entry_date
-            """, [sym, shares, eff, asof])
-            trades.append({"date": str(asof), "symbol": sym, "side": "BUY", "shares": shares, "price": float(p), "price_effective": eff, "reason": s.get("reason", "")})
+                entry_date=excluded.entry_date,
+                highest_price_since_entry=excluded.highest_price_since_entry,
+                atr_at_entry=excluded.atr_at_entry
+            """, [sym, shares, eff, asof, float(p), atr_entry])
+            trades.append({
+                "date": str(asof), "symbol": sym, "side": "BUY",
+                "shares": shares, "price_close": float(p), "price_effective": eff,
+                "reason": s.get("reason", ""), "is_stop": False
+            })
 
     # equity post
-    pos2 = con.execute("SELECT symbol, shares, avg_price FROM positions").df()
+    pos2 = con.execute("SELECT symbol, shares FROM positions").df()
     exposure2 = 0.0
     if not pos2.empty:
         for _, r in pos2.iterrows():
-            sym = r["symbol"]
-            sh = float(r["shares"])
-            p = price(sym)
+            p = price(r["symbol"])
             if p is not None:
-                exposure2 += sh * p
+                exposure2 += float(r["shares"]) * p
 
     equity_end = cash + exposure2
     exposure_pct = (exposure2 / equity_end) if equity_end > 0 else 0.0
+    cash_pct = (cash / equity_end) if equity_end > 0 else 1.0
 
     peak = con.execute("SELECT MAX(equity) FROM equity").fetchone()[0]
     peak = float(peak) if peak is not None else equity_end
@@ -178,11 +211,14 @@ def simulate_with_prices(con: duckdb.DuckDBPyConnection, cfg: core.Config, signa
         "equity_pre": equity_pre,
         "equity_end": equity_end,
         "cash_end": cash,
+        "cash_pct": cash_pct,
         "exposure_pct_end": exposure_pct,
         "drawdown": drawdown,
-        "target_value": target_value,
+        "target_per_pos": target_per_pos,
         "can_open_new": can_open_new,
         "trades": trades,
+        "bull_regime": bull_regime,
+        "effective_max_exposure": effective_max_exposure,
     }
 
 
@@ -218,7 +254,7 @@ if __name__ == "__main__":
     report_path = core.write_report(cfg, con, asof, inserted, start, end, sim)
 
     src = report_path
-    dst = "/home/ubuntu/n8n-files/latest.md"
+    dst = "/home/ubuntu/n8n-files/reports/latest.md"
     shutil.copy(src, dst)
     
     print(f"OK ({mode}). Reporte generado: {report_path}")

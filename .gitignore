@@ -1,1 +1,49 @@
+# ── Secrets & credentials ────────────────────────────────────────────────
 *.pem
+*.key
+*.crt
+.env
+*.env
+!*.env.example
+.ssh/
+aws-key/
+
+# ── Python ───────────────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*.pyo
+.venv/
+venv/
+env/
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# ── Data & database ───────────────────────────────────────────────────────
+*.duckdb
+*.duckdb.wal
+quant-bot/data/
+
+# ── Shell / system files ─────────────────────────────────────────────────
+.bash_history
+.bash_logout
+.bashrc
+.profile
+snap/
+
+# ── IDE / editor ─────────────────────────────────────────────────────────
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
+# ── Node / frontend ───────────────────────────────────────────────────────
+node_modules/
+.next/
+out/
+
+# ── n8n ──────────────────────────────────────────────────────────────────
+n8n-files/

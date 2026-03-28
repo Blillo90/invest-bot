@@ -82,7 +82,20 @@ export default function EquityChart({ data }: { data: Snapshot[] }) {
       (a, b) => +new Date(a.ts) - +new Date(b.ts)
     );
 
-    return cleaned;
+    // Eliminar puntos planos consecutivos del inicio:
+    // si hay N puntos iguales al principio, solo mantener el último antes del cambio
+    let firstChangeIdx = 0;
+    if (cleaned.length > 1) {
+      const firstVal = cleaned[0].equity;
+      let idx = 0;
+      while (idx < cleaned.length - 1 && cleaned[idx].equity === firstVal) {
+        idx++;
+      }
+      // idx apunta al primer punto diferente, o al último si todos son iguales
+      firstChangeIdx = Math.max(0, idx - 1);
+    }
+
+    return cleaned.slice(firstChangeIdx);
   }, [data, range, slot]);
 
   const domain = useMemo(() => {
