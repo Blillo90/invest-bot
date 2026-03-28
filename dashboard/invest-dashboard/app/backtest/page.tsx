@@ -181,14 +181,16 @@ const CustomTooltip = ({
 
 // ─── Verdict box ─────────────────────────────────────────────────────────────
 function Verdict({ variants }: { variants: Variant[] }) {
-  const bot     = variants.find((v) => v.id === "current_bot");
-  const fill    = variants.find((v) => v.id === "fill_to_target");
+  const bot      = variants.find((v) => v.id === "current_bot");
+  const fill     = variants.find((v) => v.id === "fill_to_target");
   const improved = variants.find((v) => v.id === "improved");
-  const spy     = variants.find((v) => v.id === "spy");
+  const ew       = variants.find((v) => v.id === "equal_weight");
+  const spy      = variants.find((v) => v.id === "spy");
   if (!bot || !improved || !spy) return null;
 
   const beatsSpy = (improved.metrics.cagr ?? 0) > (spy.metrics.cagr ?? 0);
-  const improvedOverBot = (improved.metrics.cagr ?? 0) - (bot.metrics.cagr ?? 0);
+  const gapToSpy = (spy.metrics.cagr ?? 0) - (improved.metrics.cagr ?? 0);
+  const uSize    = (variants[0] as any)?.universe_size;
 
   return (
     <div className="rounded-2xl border border-zinc-200 bg-zinc-950 p-5 text-white">
@@ -197,49 +199,48 @@ function Verdict({ variants }: { variants: Variant[] }) {
       </div>
       <div className="space-y-2 text-sm leading-relaxed text-zinc-200">
         <p>
-          <span className="font-semibold text-white">Improved</span> genera un CAGR del{" "}
-          <span className="font-bold text-emerald-400">
-            {pct(improved.metrics.cagr)}
+          Universo ampliado a{" "}
+          <span className="font-bold text-white">~266 tickers</span>.
+          La exposición del bot actual subió de ~48% a{" "}
+          <span className="font-bold text-amber-400">
+            {pct(bot.metrics.avg_exposure, 0)}
           </span>{" "}
-          frente al{" "}
-          <span className="font-bold text-zinc-300">
-            {pct(bot.metrics.cagr)}
-          </span>{" "}
-          del bot actual — mejora de{" "}
-          <span className="font-bold text-emerald-400">
-            +{pct(improvedOverBot)}
-          </span>{" "}
-          de CAGR.
+          — pero el CAGR{" "}
+          <span className="font-bold text-rose-400">empeoró</span> ({pct(bot.metrics.cagr)}).
+          Con más candidatos, el ranking buy_top_pct=7% selecciona activos mediocres del universo ampliado.
         </p>
         <p>
-          Fill-to-Target estricto ({pct(fill?.metrics.cagr)}) destruye valor: rellena
-          la cartera con activos no-momentum que diluyen la señal.
+          <span className="font-semibold text-white">Improved</span> genera un CAGR del{" "}
+          <span className="font-bold text-emerald-400">{pct(improved.metrics.cagr)}</span>{" "}
+          (Sharpe {num(improved.metrics.sharpe)}) — la única variante activa con retorno positivo.
+          Exposición media: {pct(improved.metrics.avg_exposure, 0)}.
         </p>
+        {ew && (
+          <p>
+            <span className="font-semibold text-white">Equal Weight</span> (rebalanceo mensual, top 150 por liquidez)
+            logra{" "}
+            <span className="font-bold text-emerald-400">{pct(ew.metrics.cagr)}</span>{" "}
+            de CAGR con Sharpe {num(ew.metrics.sharpe)} —{" "}
+            <span className="text-amber-300 font-semibold">casi iguala a ACWI</span> y supera a Improved.
+            Esto indica que el alpha del ranking no justifica aún los costes de rotación.
+          </p>
+        )}
         <p>
           {beatsSpy ? (
-            <>
-              Improved{" "}
-              <span className="text-emerald-400 font-semibold">supera</span> a SPY en CAGR.
-            </>
+            <span className="text-emerald-400 font-semibold">Improved supera a SPY.</span>
           ) : (
             <>
-              Improved{" "}
-              <span className="text-amber-400 font-semibold">no supera</span> a SPY (
-              {pct(spy.metrics.cagr)}) — el benchmark sigue siendo la referencia más
-              difícil de batir con este universo de 75 tickers.
+              SPY sigue siendo la referencia más difícil (
+              {pct(spy.metrics.cagr)}, Sharpe {num(spy.metrics.sharpe)}).
+              Gap vs Improved:{" "}
+              <span className="font-bold text-rose-400">-{pct(gapToSpy)}</span> de CAGR anual.
             </>
           )}
         </p>
-        <p>
-          Exposición media: Bot actual {pct(bot.metrics.avg_exposure, 0)} →
-          Improved {pct(improved.metrics.avg_exposure, 0)}. El problema de
-          infraexposición está <span className="text-emerald-400 font-semibold">resuelto</span>.
-        </p>
         <p className="mt-2 text-zinc-400 text-xs">
-          Sharpe Improved: {num(improved.metrics.sharpe)} · Sortino:{" "}
+          Improved — Sharpe: {num(improved.metrics.sharpe)} · Sortino:{" "}
           {num(improved.metrics.sortino)} · Max DD:{" "}
-          {pct(improved.metrics.max_drawdown)} · Calmar:{" "}
-          {num(improved.metrics.calmar)}
+          {pct(improved.metrics.max_drawdown)} · Calmar: {num(improved.metrics.calmar)}
         </p>
       </div>
     </div>
