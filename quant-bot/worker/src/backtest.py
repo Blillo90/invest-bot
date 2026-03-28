@@ -36,6 +36,9 @@ from strategy.core import (
     compute_metrics,
     compute_annual_returns,
     sanitize,
+    compute_ema_sma_bollinger_features,
+    ema_sma_bollinger_buy_signal,
+    ema_sma_bollinger_sell_signal,
 )
 
 # ─── Paths ────────────────────────────────────────────────────────────────────
@@ -158,6 +161,7 @@ class VariantConfig:
     use_score_v2:       bool  = False  # quality-adjusted scoring (v2 formula)
     trend_exit:         bool  = False  # exit held position if close < SMA50
     vol_weighted_size:  bool  = False  # scale position size inversely with vol_20
+    use_ema_sma_bb:     bool  = False  # EMA_SMA_Bollinger strategy
 
 STRATEGY_VARIANTS = [
     # current_bot: exact live-bot parameters from env (or defaults matching run_daily.py)
@@ -180,6 +184,11 @@ STRATEGY_VARIANTS = [
                   buy_top_pct=0.10, sell_out_pct=0.25,
                   fill_to_target=True, fill_relaxed_trend=False,
                   use_score_v2=True, trend_exit=True, vol_weighted_size=True),
+    VariantConfig("ema_sma_bollinger", "EMA_SMA_Bollinger", "#f59e0b",
+                  buy_top_pct=0.10, sell_out_pct=0.25,
+                  fill_to_target=True, fill_relaxed_trend=True,
+                  use_score_v2=False, trend_exit=False, vol_weighted_size=False,
+                  use_ema_sma_bb=True),
 ]
 
 
@@ -326,12 +335,90 @@ def score_universe(
 
 
 def generate_signals(
-    day_data:   DayLookup,
+    day_data:    DayLookup,
     liquid_syms: List[str],
-    cfg:        VariantConfig,
-    portfolio:  Set[str],
+    cfg:         VariantConfig,
+    portfolio:   Set[str],
     eff_max_exp: float,
+    date:        Optional[pd.Timestamp] = None,
+    ema_bb_ts:   Optional[Dict[str, pd.DataFrame]] = None,
 ) -> Tuple[List[str], List[str], List[str]]:
+
+    # ── EMA_SMA_Bollinger path ──────────────────────────────────────────────
+    if cfg.use_ema_sma_bb and ema_bb_ts is not None and date is not None:
+        buy_primary: List[str] = []
+        to_sell: List[str] = []
+
+        for sym in liquid_syms:
+            ts = ema_bb_ts.get(sym)
+            if ts is None or ts.empty:
+                continue
+            # slice history up to and including current date
+            hist = ts[ts.index <= date]
+            if len(hist) < 15:
+                continue
+
+            if sym not in portfolio:
+                try:
+                    triggered = ema_sma_bollinger_buy_signal(
+                        closes=hist["close"],
+                        emas=hist["ema_9"],
+                        smas=hist["sma_21"],
+                        bb_uppers=hist["bb_upper"],
+                        bb_lowers=hist["bb_lower"],
+                        opens=hist["open"],
+                    )
+                except Exception:
+                    triggered = False
+                if triggered:
+                    buy_primary.append(sym)
+            else:
+                try:
+                    sell_triggered, _ = ema_sma_bollinger_sell_signal(
+                        closes=hist["close"],
+                        emas=hist["ema_9"],
+                        smas=hist["sma_21"],
+                        bb_uppers=hist["bb_upper"],
+                        bb_lowers=hist["bb_lower"],
+                    )
+                except Exception:
+                    sell_triggered = False
+                if sell_triggered:
+                    to_sell.append(sym)
+
+        buy_primary = buy_primary[:MAX_REPLACEMENTS]
+        to_sell     = to_sell[:MAX_REPLACEMENTS]
+
+        buy_fill: List[str] = []
+        if cfg.fill_to_target:
+            # Additional fill candidates: liquid symbols with buy signal not already buying
+            already_buying = set(buy_primary)
+            for sym in liquid_syms:
+                if sym in portfolio or sym in already_buying:
+                    continue
+                ts = ema_bb_ts.get(sym)
+                if ts is None or ts.empty:
+                    continue
+                hist = ts[ts.index <= date]
+                if len(hist) < 15:
+                    continue
+                try:
+                    triggered = ema_sma_bollinger_buy_signal(
+                        closes=hist["close"],
+                        emas=hist["ema_9"],
+                        smas=hist["sma_21"],
+                        bb_uppers=hist["bb_upper"],
+                        bb_lowers=hist["bb_lower"],
+                        opens=hist["open"],
+                    )
+                except Exception:
+                    triggered = False
+                if triggered:
+                    buy_fill.append(sym)
+
+        return buy_primary, buy_fill, to_sell
+
+    # ── Standard momentum path ──────────────────────────────────────────────
     # Score universe with the formula selected by cfg (v1 or v2)
     df = score_universe(day_data, liquid_syms, use_v2=cfg.use_score_v2)
     if df.empty:
@@ -363,13 +450,13 @@ def generate_signals(
     trend_strict_set  = {s for s in df["symbol"] if strict_trend(s)}
     trend_relaxed_set = {s for s in df["symbol"] if relaxed_trend(s)}
 
-    buy_primary = (
+    buy_primary_std = (
         df[df["symbol"].isin((buy_set & trend_strict_set) - portfolio)]
         .head(MAX_REPLACEMENTS)["symbol"].tolist()
     )
 
     # Rank-based sells: positions that dropped out of hold_set
-    to_sell = (
+    to_sell_std = (
         df[df["symbol"].isin(portfolio - hold_set)]
         .sort_values("score", ascending=True)["symbol"].tolist()
     )
@@ -377,7 +464,7 @@ def generate_signals(
     # BotTest2 — trend exit: sell held positions that have broken their uptrend
     # (close < SMA50), even if still inside the hold_set ranking threshold.
     if cfg.trend_exit:
-        already_selling = set(to_sell)
+        already_selling = set(to_sell_std)
         for sym in portfolio:
             if sym in already_selling:
                 continue
@@ -385,17 +472,17 @@ def generate_signals(
             c   = d.get("close",  float("nan"))
             s50 = d.get("sma_50", float("nan"))
             if not math.isnan(c) and not math.isnan(s50) and c < s50:
-                to_sell.append(sym)
+                to_sell_std.append(sym)
 
-    to_sell = to_sell[:MAX_REPLACEMENTS]
+    to_sell_std = to_sell_std[:MAX_REPLACEMENTS]
 
-    buy_fill: List[str] = []
+    buy_fill_std: List[str] = []
     if cfg.fill_to_target:
         trend_for_fill = trend_relaxed_set if cfg.fill_relaxed_trend else trend_strict_set
-        fill_pool = trend_for_fill - portfolio - set(buy_primary)
-        buy_fill = df[df["symbol"].isin(fill_pool)]["symbol"].tolist()
+        fill_pool = trend_for_fill - portfolio - set(buy_primary_std)
+        buy_fill_std = df[df["symbol"].isin(fill_pool)]["symbol"].tolist()
 
-    return buy_primary, buy_fill, to_sell
+    return buy_primary_std, buy_fill_std, to_sell_std
 
 
 # ─── 5. Simulation ────────────────────────────────────────────────────────────
@@ -423,6 +510,7 @@ def simulate_variant(
     cfg:           VariantConfig,
     lookup:        Dict[pd.Timestamp, DayLookup],
     trading_dates: pd.DatetimeIndex,
+    prices:        Optional[Dict[str, pd.DataFrame]] = None,
 ) -> Dict:
     print(f"   -> Simulating '{cfg.label}'...")
     cash: float = START_CASH
@@ -430,6 +518,20 @@ def simulate_variant(
     equity_curve, drawdown_curve, exposure_curve = [], [], []
     trades_log: List[dict] = []
     peak = START_CASH
+
+    # ── Precompute EMA/SMA/Bollinger time series (EMA_SMA_Bollinger only) ────
+    ema_bb_ts: Optional[Dict[str, pd.DataFrame]] = None
+    if cfg.use_ema_sma_bb and prices is not None:
+        print(f"      Precomputing EMA/SMA/Bollinger features for {len(prices)} tickers...")
+        ema_bb_ts = {}
+        for sym, df_ohlcv in prices.items():
+            try:
+                feat = compute_ema_sma_bollinger_features(df_ohlcv)
+                if not feat.empty:
+                    ema_bb_ts[sym] = feat[["open", "close", "ema_9", "sma_21", "bb_upper", "bb_lower"]]
+            except Exception:
+                pass
+        print(f"      EMA/SMA/BB precomputed for {len(ema_bb_ts)} tickers.")
 
     for date in trading_dates:
         day_data = lookup.get(date, {})
@@ -476,7 +578,8 @@ def simulate_variant(
 
         # 4. Signals
         buy_primary, buy_fill, to_sell = generate_signals(
-            day_data, liquid_syms, cfg, set(portfolio.keys()), eff_max_exp
+            day_data, liquid_syms, cfg, set(portfolio.keys()), eff_max_exp,
+            date=date, ema_bb_ts=ema_bb_ts,
         )
 
         # 5. Sell by ranking
@@ -799,7 +902,7 @@ def main():
     results = []
 
     for cfg in STRATEGY_VARIANTS:
-        results.append(simulate_variant(cfg, lookup, trading_dates))
+        results.append(simulate_variant(cfg, lookup, trading_dates, prices=prices))
 
     results.append(simulate_equal_weight(lookup, trading_dates))
     results.append(simulate_benchmark("SPY",  "SPY (B&H)",  "#0ea5e9", "spy",  features, trading_dates))

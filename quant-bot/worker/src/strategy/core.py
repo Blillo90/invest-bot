@@ -410,3 +410,199 @@ def sanitize(obj):
     if isinstance(obj, list):
         return [sanitize(v) for v in obj]
     return obj
+
+
+# ────────────────────────────────────────────────────────────────────────────
+# EMA / SMA / Bollinger helpers (used by EMA_SMA_Bollinger variant)
+# ────────────────────────────────────────────────────────────────────────────
+
+def compute_ema(series: pd.Series, span: int) -> pd.Series:
+    """Exponential moving average."""
+    return series.ewm(span=span, adjust=False).mean()
+
+
+def compute_bollinger(series: pd.Series, length: int = 20, stddev: float = 2.0):
+    """
+    Returns (upper, middle, lower) Bollinger Band Series.
+    middle = SMA(length), bands = middle ± stddev * rolling_std(length).
+    """
+    mid = series.rolling(length).mean()
+    std = series.rolling(length).std()
+    return mid + stddev * std, mid, mid - stddev * std
+
+
+def compute_ema_sma_bollinger_features(df: pd.DataFrame,
+                                        ema_len: int = 9,
+                                        sma_len: int = 21,
+                                        bb_len: int = 20,
+                                        bb_std: float = 2.0) -> pd.DataFrame:
+    """
+    Compute EMA, SMA, and Bollinger Band columns on a per-ticker OHLCV DataFrame.
+
+    Adds columns:
+        ema_9, sma_21, bb_upper, bb_mid, bb_lower
+    Drops rows with NaN in those columns.
+    """
+    d = df.copy().sort_index()
+    d["ema_9"]    = compute_ema(d["close"], ema_len)
+    d["sma_21"]   = d["close"].rolling(sma_len).mean()
+    upper, mid, lower = compute_bollinger(d["close"], bb_len, bb_std)
+    d["bb_upper"] = upper
+    d["bb_mid"]   = mid
+    d["bb_lower"] = lower
+    return d.dropna(subset=["ema_9", "sma_21", "bb_upper", "bb_lower"])
+
+
+def ema_sma_bollinger_buy_signal(
+    closes: pd.Series,
+    emas: pd.Series,
+    smas: pd.Series,
+    bb_uppers: pd.Series,
+    bb_lowers: pd.Series,
+    opens: pd.Series,
+    crossover_window: int = 5,
+    belly_window: int = 3,
+    slope_lookback: int = 3,
+) -> bool:
+    """
+    Returns True when ALL buy conditions are met at the last bar.
+
+    Conditions:
+      A. Recent bullish EMA/SMA crossover within last `crossover_window` bars.
+         - crossover bar: ema[i-1] <= sma[i-1] AND ema[i] > sma[i]
+         - EMA still above SMA on the current bar.
+      B. Post-crossover belly:
+         - spread = ema - sma
+         - spread > 0 on current bar
+         - spread now > spread at crossover bar
+         - spread growth over last 2 bars < spread growth immediately after crossover
+         - current close < max close of last 3 bars (mild pause)
+         - current close > sma (structurally healthy)
+      C. Bollinger compression:
+         - upper_band[now] < upper_band[slope_lookback bars ago]
+         - lower_band[now] > lower_band[slope_lookback bars ago]
+         - band width now < band width slope_lookback bars ago
+      D. Previous candle is red: closes[-2] < opens[-2]
+
+    All arrays must be aligned; the last element is the decision bar.
+    Returns False if there is insufficient history.
+    """
+    min_bars = crossover_window + slope_lookback + belly_window + 2
+    if len(closes) < min_bars:
+        return False
+
+    # ── A. Recent bullish crossover ──────────────────────────────────────────
+    crossover_bar = None
+    # search back through crossover_window bars (not including the current bar)
+    for k in range(1, crossover_window + 1):
+        idx_prev = -(k + 1)
+        idx_cur  = -k
+        try:
+            e_prev, s_prev = emas.iloc[idx_prev], smas.iloc[idx_prev]
+            e_cur,  s_cur  = emas.iloc[idx_cur],  smas.iloc[idx_cur]
+        except IndexError:
+            break
+        if math.isnan(e_prev) or math.isnan(s_prev) or math.isnan(e_cur) or math.isnan(s_cur):
+            continue
+        if e_prev <= s_prev and e_cur > s_cur:
+            crossover_bar = idx_cur
+            break
+
+    if crossover_bar is None:
+        return False
+    # EMA still above SMA on the current (decision) bar
+    if emas.iloc[-1] <= smas.iloc[-1]:
+        return False
+
+    # ── B. Belly pattern ─────────────────────────────────────────────────────
+    spread_now      = emas.iloc[-1]  - smas.iloc[-1]
+    spread_xover    = emas.iloc[crossover_bar] - smas.iloc[crossover_bar]
+    if spread_now <= 0 or spread_now <= spread_xover:
+        return False
+
+    # Growth deceleration: spread change over last 2 bars vs first bar after crossover
+    spread_2_ago    = emas.iloc[-3] - smas.iloc[-3]
+    spread_1_ago    = emas.iloc[-2] - smas.iloc[-2]
+    growth_recent   = spread_now - spread_2_ago          # last 2 bars
+    spread_xover_p1 = emas.iloc[crossover_bar + 1] - smas.iloc[crossover_bar + 1] if crossover_bar + 1 < 0 else (
+        emas.iloc[-1 + (crossover_bar + 1 - (-1))] - smas.iloc[-1 + (crossover_bar + 1 - (-1))]
+        if crossover_bar != -1 else spread_now
+    )
+    growth_initial  = spread_xover_p1 - spread_xover
+    # Recent growth must be smaller than initial burst (deceleration)
+    if growth_recent >= growth_initial and growth_initial > 0:
+        return False
+
+    # Price pause: close not the highest of last 3 bars
+    recent_high = closes.iloc[-3:].max()
+    if closes.iloc[-1] >= recent_high:
+        return False
+    # Structurally healthy: close above SMA
+    if closes.iloc[-1] <= smas.iloc[-1]:
+        return False
+
+    # ── C. Bollinger compression ──────────────────────────────────────────────
+    ub_now  = bb_uppers.iloc[-1]
+    ub_ago  = bb_uppers.iloc[-1 - slope_lookback]
+    lb_now  = bb_lowers.iloc[-1]
+    lb_ago  = bb_lowers.iloc[-1 - slope_lookback]
+    if math.isnan(ub_now) or math.isnan(ub_ago) or math.isnan(lb_now) or math.isnan(lb_ago):
+        return False
+    if ub_now >= ub_ago:    # upper band must be falling
+        return False
+    if lb_now <= lb_ago:    # lower band must be rising
+        return False
+    width_now = ub_now - lb_now
+    width_ago = ub_ago - lb_ago
+    if width_now >= width_ago:  # overall width must narrow
+        return False
+
+    # ── D. Previous candle red ────────────────────────────────────────────────
+    if closes.iloc[-2] >= opens.iloc[-2]:
+        return False
+
+    return True
+
+
+def ema_sma_bollinger_sell_signal(
+    closes: pd.Series,
+    emas: pd.Series,
+    smas: pd.Series,
+    bb_uppers: pd.Series,
+    bb_lowers: pd.Series,
+) -> tuple[bool, str]:
+    """
+    Returns (triggered, reason) for sell conditions.
+
+    Sell when ANY of:
+      A. Bearish EMA/SMA crossover: ema[-2] >= sma[-2] AND ema[-1] < sma[-1]
+      B. Structure failure: close < both EMA and SMA
+      C. Pattern invalidation: Bollinger expanding (compression gone) AND close < EMA
+    """
+    if len(closes) < 3:
+        return False, ""
+
+    e_now, s_now = emas.iloc[-1], smas.iloc[-1]
+    e_prev, s_prev = emas.iloc[-2], smas.iloc[-2]
+    c_now = closes.iloc[-1]
+
+    # A. Bearish crossover
+    if not (math.isnan(e_prev) or math.isnan(s_prev) or math.isnan(e_now) or math.isnan(s_now)):
+        if e_prev >= s_prev and e_now < s_now:
+            return True, "EMA crossed below SMA"
+
+    # B. Structure failure
+    if not (math.isnan(e_now) or math.isnan(s_now)):
+        if c_now < e_now and c_now < s_now:
+            return True, "Close below both EMA and SMA"
+
+    # C. Pattern invalidation: Bollinger expanding AND close < EMA
+    if len(bb_uppers) >= 4 and len(bb_lowers) >= 4:
+        ub_now = bb_uppers.iloc[-1]; ub_ago = bb_uppers.iloc[-4]
+        lb_now = bb_lowers.iloc[-1]; lb_ago = bb_lowers.iloc[-4]
+        if not any(math.isnan(x) for x in [ub_now, ub_ago, lb_now, lb_ago]):
+            bb_expanding = (ub_now > ub_ago) and (lb_now < lb_ago)
+            if bb_expanding and c_now < e_now:
+                return True, "BB expanding and close below EMA"
+
+    return False, ""
