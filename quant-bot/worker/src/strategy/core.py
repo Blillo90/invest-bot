@@ -790,3 +790,203 @@ def ema_sma_bollinger_v2_sell_signal(
                 return True, "BB expanding and close below EMA (failed recovery)"
 
     return False, ""
+
+
+# ────────────────────────────────────────────────────────────────────────────
+# EMA_SMA_Bollinger V3 — intermediate variant (between V1 too loose / V2 too strict)
+# ────────────────────────────────────────────────────────────────────────────
+
+def ema_sma_bollinger_v3_buy_signal(
+    closes: pd.Series,
+    opens: pd.Series,
+    highs: pd.Series,
+    emas: pd.Series,
+    smas: pd.Series,
+    bb_uppers: pd.Series,
+    bb_lowers: pd.Series,
+    crossover_window: int = 8,
+    slope_lookback: int = 3,
+) -> bool:
+    """
+    EMA_SMA_Bollinger V3 buy signal. Intermediate between V1 (too loose) and V2 (too restrictive).
+
+    All conditions must be true:
+
+    A. BULLISH TREND STRUCTURE (relaxed vs V2)
+       - EMA crossed above SMA within last crossover_window (8) bars
+       - EMA still above SMA on decision bar
+       - EMA slope positive over slope_lookback bars
+       - SMA slope > -0.001 * close[-1] per bar (allows mild lag, not strict non-negative)
+
+    B. CONTROLLED PULLBACK / BELLY (relaxed vs V2)
+       - spread = EMA - SMA > 0
+       - close below recent 3-bar high (pause exists)
+       - close above SMA (no breakdown — same as V2)
+       - spread not collapsing: change over last 2 bars > -0.008 * close[-1]  (looser than V2's -0.005)
+       NOTE: Does NOT require spread > spread_at_crossover (removes V2's strict growth requirement)
+
+    C. BOLLINGER COMPRESSION (relaxed — at least 2 of 3 conditions)
+       Require at least 2 of:
+       1. upper_band[-1] < upper_band[-1-slope_lookback]
+       2. lower_band[-1] > lower_band[-1-slope_lookback]
+       3. width[-1] < width[-1-slope_lookback]
+       (V2 required all 3)
+
+    D. RECENT PULLBACK CONTEXT (relaxed vs V2)
+       Require: at least one of the last 2 candles is red (prev or 2 bars ago)
+       (V2 required previous candle to be red AND body-size check)
+       No body-size filter.
+
+    E. BULLISH CONFIRMATION (relaxed vs V2)
+       Require:
+       - current candle is green: close[-1] > open[-1]
+       - AND at least one of:
+           * close[-1] > ema[-1]          (close above EMA)
+           * high[-1] > max(open[-2], close[-2])   (high breaks prior candle)
+           * close[-1] > (open[-2] + close[-2]) / 2  (close above prior candle midpoint)
+       (V2 required green candle AND close > prior candle high — very strict)
+
+    Returns False if insufficient history.
+    """
+    min_bars = crossover_window + slope_lookback + 5
+    if len(closes) < min_bars:
+        return False
+
+    # A. Bullish trend structure
+    crossover_bar = None
+    for k in range(1, crossover_window + 1):
+        idx_prev = -(k + 1)
+        idx_cur  = -k
+        try:
+            e_prev, s_prev = emas.iloc[idx_prev], smas.iloc[idx_prev]
+            e_cur,  s_cur  = emas.iloc[idx_cur],  smas.iloc[idx_cur]
+        except IndexError:
+            break
+        if any(math.isnan(x) for x in [e_prev, s_prev, e_cur, s_cur]):
+            continue
+        if e_prev <= s_prev and e_cur > s_cur:
+            crossover_bar = idx_cur
+            break
+
+    if crossover_bar is None:
+        return False
+    if emas.iloc[-1] <= smas.iloc[-1]:
+        return False
+
+    # EMA slope positive
+    e_now = emas.iloc[-1]; e_ago = emas.iloc[-1 - slope_lookback]
+    if math.isnan(e_now) or math.isnan(e_ago) or e_now <= e_ago:
+        return False
+
+    # SMA slope: allow mild negative (> -0.001 * close per bar over slope_lookback)
+    s_now = smas.iloc[-1]; s_ago = smas.iloc[-1 - slope_lookback]
+    if math.isnan(s_now) or math.isnan(s_ago):
+        return False
+    sma_slope_per_bar = (s_now - s_ago) / slope_lookback
+    sma_tolerance = -0.001 * closes.iloc[-1]
+    if sma_slope_per_bar < sma_tolerance:
+        return False
+
+    # B. Controlled pullback / belly
+    spread_now = emas.iloc[-1] - smas.iloc[-1]
+    if spread_now <= 0:
+        return False
+
+    # Close below 3-bar high (pause)
+    recent_high = closes.iloc[-4:-1].max()
+    if closes.iloc[-1] >= recent_high:
+        return False
+
+    # Close above SMA
+    if closes.iloc[-1] <= smas.iloc[-1]:
+        return False
+
+    # Spread not collapsing (looser: -0.008 vs V2's -0.005)
+    if len(emas) >= 3 and len(smas) >= 3:
+        spread_2_ago = emas.iloc[-3] - smas.iloc[-3]
+        spread_change = spread_now - spread_2_ago
+        collapse_threshold = -0.008 * closes.iloc[-1]
+        if spread_change < collapse_threshold:
+            return False
+
+    # C. Bollinger compression — at least 2 of 3
+    ub_now = bb_uppers.iloc[-1]; ub_ago = bb_uppers.iloc[-1 - slope_lookback]
+    lb_now = bb_lowers.iloc[-1]; lb_ago = bb_lowers.iloc[-1 - slope_lookback]
+    if any(math.isnan(x) for x in [ub_now, ub_ago, lb_now, lb_ago]):
+        return False
+    bb_conditions = [
+        ub_now < ub_ago,
+        lb_now > lb_ago,
+        (ub_now - lb_now) < (ub_ago - lb_ago),
+    ]
+    if sum(bb_conditions) < 2:
+        return False
+
+    # D. Recent pullback context: at least one red candle in last 2
+    prev_red  = closes.iloc[-2] < opens.iloc[-2]
+    prev2_red = closes.iloc[-3] < opens.iloc[-3] if len(closes) >= 3 else False
+    if not (prev_red or prev2_red):
+        return False
+
+    # E. Bullish confirmation: green candle + at least one of 3 sub-conditions
+    curr_close = closes.iloc[-1]; curr_open = opens.iloc[-1]
+    if curr_close <= curr_open:
+        return False
+
+    curr_high     = highs.iloc[-1]
+    prev_high_bar = max(opens.iloc[-2], closes.iloc[-2])
+    prev_mid      = (opens.iloc[-2] + closes.iloc[-2]) / 2.0
+    confirmation  = (
+        curr_close > emas.iloc[-1]         # close above EMA
+        or curr_high > prev_high_bar       # high breaks prior candle
+        or curr_close > prev_mid           # close above prior midpoint
+    )
+    if not confirmation:
+        return False
+
+    return True
+
+
+def ema_sma_bollinger_v3_sell_signal(
+    closes: pd.Series,
+    emas: pd.Series,
+    smas: pd.Series,
+    bb_uppers: pd.Series,
+    bb_lowers: pd.Series,
+    slope_lookback: int = 3,
+) -> tuple[bool, str]:
+    """
+    EMA_SMA_Bollinger V3 sell signal (same family as V2).
+
+    Sell on ANY of:
+    A. Bearish EMA/SMA crossover
+    B. Close below both EMA and SMA (structure failure)
+    C. Close below EMA AND BB width expanding (failed recovery)
+    """
+    if len(closes) < slope_lookback + 3:
+        return False, ""
+
+    e_now, s_now = emas.iloc[-1], smas.iloc[-1]
+    e_prev, s_prev = emas.iloc[-2], smas.iloc[-2]
+    c_now = closes.iloc[-1]
+
+    # A. Bearish crossover
+    if not any(math.isnan(x) for x in [e_prev, s_prev, e_now, s_now]):
+        if e_prev >= s_prev and e_now < s_now:
+            return True, "EMA crossed below SMA"
+
+    # B. Structure failure
+    if not any(math.isnan(x) for x in [e_now, s_now]):
+        if c_now < e_now and c_now < s_now:
+            return True, "Close below both EMA and SMA"
+
+    # C. Failed recovery: close < EMA AND BB expanding
+    if len(bb_uppers) >= slope_lookback + 2 and len(bb_lowers) >= slope_lookback + 2:
+        ub_now = bb_uppers.iloc[-1]; ub_ago = bb_uppers.iloc[-1 - slope_lookback]
+        lb_now = bb_lowers.iloc[-1]; lb_ago = bb_lowers.iloc[-1 - slope_lookback]
+        if not any(math.isnan(x) for x in [ub_now, ub_ago, lb_now, lb_ago]):
+            bb_expanding = (ub_now - lb_now) > (ub_ago - lb_ago)
+            if bb_expanding and c_now < e_now:
+                return True, "BB expanding and close below EMA"
+
+    return False, ""
