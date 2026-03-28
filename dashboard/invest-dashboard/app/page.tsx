@@ -233,8 +233,12 @@ type TradeLog = {
   reason: string;
 };
 
+const BASE_URL = process.env.VERCEL_URL
+  ? `https://${process.env.VERCEL_URL}`
+  : "http://localhost:3000";
+
 export default async function Page() {
-  const res = await fetch("http://localhost:3000/api/history", {
+  const res = await fetch(`${BASE_URL}/api/history`, {
     cache: "no-store",
   });
 
@@ -250,7 +254,7 @@ export default async function Page() {
 
   const positions = await getCurrentPositions();
 
-  const tradesRes = await fetch("http://localhost:3000/api/trades", {
+  const tradesRes = await fetch(`${BASE_URL}/api/trades`, {
     cache: "no-store",
   });
   const tradesJson = await tradesRes.json();

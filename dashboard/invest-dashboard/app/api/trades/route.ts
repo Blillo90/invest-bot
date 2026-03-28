@@ -1,23 +1,17 @@
 import { NextResponse } from "next/server";
-import { promises as fs } from "fs";
 
-const TRADES_PATH = "/home/ubuntu/quant-bot/trades.json";
+const EC2_API = process.env.EC2_API_URL ?? "http://13.61.27.226:5000";
 
 export async function GET() {
   try {
-    const raw = await fs.readFile(TRADES_PATH, "utf8");
-    const data = raw.trim() ? JSON.parse(raw) : [];
+    const res = await fetch(`${EC2_API}/trades`, { cache: "no-store" });
+    if (!res.ok) throw new Error(`EC2 /trades returned ${res.status}`);
+    const data = await res.json();
     return NextResponse.json(
       { ok: true, count: Array.isArray(data) ? data.length : 0, data },
       { status: 200 }
     );
   } catch (err: any) {
-    if (err?.code === "ENOENT") {
-      return NextResponse.json({ ok: true, count: 0, data: [] }, { status: 200 });
-    }
-    return NextResponse.json(
-      { ok: false, error: err?.message ?? "Unknown error" },
-      { status: 500 }
-    );
+    return NextResponse.json({ ok: true, count: 0, data: [] }, { status: 200 });
   }
 }
