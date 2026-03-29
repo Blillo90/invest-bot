@@ -122,6 +122,43 @@ UNIVERSE = [
     "GLD","SLV","DBC","USO",
     # ETFs - bonds
     "TLT","IEF","TIP",
+    # ── Expanded universe (S&P 500 additions) ──────────────────────────────
+    # Note: static list introduces survivorship bias for companies listed
+    # after 2010. Recent IPOs will simply have no data before their listing
+    # date and will be skipped by MIN_HISTORY_DAYS for early backtest years.
+    # Healthcare additions
+    "LLY","BMY","MRNA","DXCM","IQV","MOH","CNC","RMD","BAX",
+    "STE","WAT","MTD","A","PODD","VTRS","CRL","HOLX","ALGN",
+    # Tech / hardware / software additions
+    "HPQ","HPE","WDC","NTAP","KEYS","TER","APH","GLW","GRMN","ZBRA",
+    "LDOS","SAIC","BAH","CTSH","GPN","FSLR","ENPH","CDW","JNPR",
+    "VEEV","ANSS","PTC","FFIV","JKHY","APP","NTNX",
+    # Financials additions
+    "COF","AIG","TRV","ALL","PGR","HIG","STT","TROW","BEN","IVZ",
+    "BK","SYF","DFS","ALLY","CFG","KEY","RF","ZION","HBAN","FHN",
+    "CBOE","NDAQ","CINF","GL","PFG","LNC","UNM","WTW","EG","VOYA",
+    # Energy additions
+    "VLO","MPC","HES","BKR","CTRA","MRO","TRGP",
+    # Materials additions
+    "PPG","VMC","MLM","IFF","CE","DD","EMN","IP","BALL","CCK","SEE",
+    # Real estate additions
+    "AVB","EQR","ARE","UDR","WY","INVH","EXR","VICI","GLPI","MAA",
+    # Utilities additions
+    "AEE","WEC","ETR","CMS","DTE","D","NI","PPL","AES","CNP",
+    # Industrials additions
+    "UNP","CSX","PCAR","URI","LHX","AXON","CPRT","FAST","SNA","SWK",
+    "PH","XYL","WAB","EXPD","CHRW","JBHT","BR","GWW","DOV","IR",
+    "PAYX","NDSN","AOS","ROL","RHI","HUBB","IEX","MAS","TT","PWR",
+    # Consumer staples additions
+    "CPB","HSY","MNST","HRL","MKC","CHD","CLX","KMB","AMCR","LW",
+    "SJM","CAG","TAP","RL","PVH",
+    # Consumer discretionary additions
+    "LULU","AZO","LKQ","CCL","RCL","NCLH","H","POOL","DECK","MHK",
+    "WHR","BBWI","TPR","NWL","HAS","MAT","F","GM",
+    # Telecom additions
+    "TMUS","AMX",
+    # Broad index ETFs
+    "IWM","DIA","EWJ","EWG","EWU","EWC","FXI","EWA",
 ]
 # Dedup preserving order
 UNIVERSE = list(dict.fromkeys(UNIVERSE))
@@ -139,9 +176,9 @@ def _envi(k: str, d: int) -> int:
     try:    return int(os.getenv(k, str(d)))
     except: return d
 
-DOWNLOAD_START       = "2022-07-01"
-BACKTEST_START       = "2023-01-03"
-BACKTEST_END         = "2026-03-27"
+DOWNLOAD_START       = "2008-01-01"   # 2yr warmup before BACKTEST_START
+BACKTEST_START       = "2010-01-04"   # ~16yr backtest window
+BACKTEST_END         = dt.date.today().isoformat()
 START_CASH           = _envf("START_CASH",        100_000.0)
 FEE_TOTAL            = (_envf("FEE_BPS", 10) + _envf("SLIPPAGE_BPS", 10)) / 10_000.0
 MAX_POSITIONS        = _envi("MAX_POSITIONS",     12)
