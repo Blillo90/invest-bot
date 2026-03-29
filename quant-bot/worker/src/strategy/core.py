@@ -1235,3 +1235,106 @@ def ema_sma_bollinger_v4_sell_signal(
 
     return False, ""
 
+
+# ────────────────────────────────────────────────────────────────────────────
+# EMA_SMA_Bollinger V5 — volatility breakout after compression
+# ────────────────────────────────────────────────────────────────────────────
+
+def ema_sma_bollinger_v5_breakout_buy_signal(
+    closes: pd.Series,
+    opens: pd.Series,
+    emas: pd.Series,
+    smas: pd.Series,
+    bb_uppers: pd.Series,
+    bb_lowers: pd.Series,
+    slope_lookback: int = 3,
+    comp_window: int = 20,
+    comp_lookback: int = 5,
+) -> bool:
+    """
+    EMA_SMA_Bollinger V5 breakout buy signal.
+
+    BUY when ALL of:
+    A. TREND: EMA > SMA, EMA slope positive over last slope_lookback bars
+    B. COMPRESSION was present in the last comp_lookback bars (before current):
+       - at least one of those bars had width < 30th-percentile of the prior
+         comp_window bars (no lookahead)
+    C. BREAKOUT: current close > bb_upper
+    D. BULLISH CANDLE: close > open
+    """
+    min_bars = comp_window + comp_lookback + slope_lookback + 3
+    if len(closes) < min_bars:
+        return False
+
+    widths = bb_uppers - bb_lowers
+
+    # A. Trend filter
+    e_now = emas.iloc[-1]
+    s_now = smas.iloc[-1]
+    if math.isnan(e_now) or math.isnan(s_now):
+        return False
+    if e_now <= s_now:
+        return False
+
+    e_ago = emas.iloc[-1 - slope_lookback]
+    if math.isnan(e_ago) or e_now <= e_ago:
+        return False
+
+    # B. Compression in recent past bars (last comp_lookback bars before current bar)
+    # Reference widths: the comp_window bars that precede the compression window
+    ref_widths = widths.iloc[-(comp_window + comp_lookback + 1):-comp_lookback - 1]
+    if len(ref_widths) < 5:
+        return False
+    threshold = ref_widths.quantile(0.30)
+    if math.isnan(threshold):
+        return False
+
+    recent_past = widths.iloc[-comp_lookback - 1:-1]  # last comp_lookback bars before current
+    compressed_recently = any(w < threshold for w in recent_past if not math.isnan(w))
+    if not compressed_recently:
+        return False
+
+    # C. Breakout: current close above upper band
+    c_now = closes.iloc[-1]
+    ub_now = bb_uppers.iloc[-1]
+    if math.isnan(ub_now) or c_now <= ub_now:
+        return False
+
+    # D. Bullish candle
+    o_now = opens.iloc[-1]
+    if math.isnan(o_now) or c_now <= o_now:
+        return False
+
+    return True
+
+
+def ema_sma_bollinger_v5_breakout_sell_signal(
+    closes: pd.Series,
+    emas: pd.Series,
+    smas: pd.Series,
+) -> tuple[bool, str]:
+    """
+    EMA_SMA_Bollinger V5 breakout sell signal.
+
+    EXIT when ANY of:
+    A. EMA crossed below SMA (trend reversal)
+    B. Close < EMA (momentum failure — price fell back below EMA)
+    """
+    if len(closes) < 3:
+        return False, ""
+
+    e_now  = emas.iloc[-1];  s_now  = smas.iloc[-1]
+    e_prev = emas.iloc[-2];  s_prev = smas.iloc[-2]
+    c_now  = closes.iloc[-1]
+
+    # A. Bearish EMA/SMA crossover
+    if not any(math.isnan(x) for x in [e_prev, s_prev, e_now, s_now]):
+        if e_prev >= s_prev and e_now < s_now:
+            return True, "EMA crossed below SMA"
+
+    # B. Close fell below EMA
+    if not math.isnan(e_now) and c_now < e_now:
+        return True, "Close below EMA"
+
+    return False, ""
+
