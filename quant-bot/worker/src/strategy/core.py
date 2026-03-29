@@ -990,3 +990,248 @@ def ema_sma_bollinger_v3_sell_signal(
                 return True, "BB expanding and close below EMA"
 
     return False, ""
+
+
+# ────────────────────────────────────────────────────────────────────────────
+# EMA_SMA_Bollinger V4 — long-only with bearish belly filter
+# ────────────────────────────────────────────────────────────────────────────
+
+def ema_sma_bollinger_bearish_belly(
+    closes: pd.Series,
+    opens: pd.Series,
+    lows: pd.Series,
+    emas: pd.Series,
+    smas: pd.Series,
+    bb_uppers: pd.Series,
+    bb_lowers: pd.Series,
+    crossover_window: int = 8,
+    slope_lookback: int = 3,
+) -> bool:
+    """
+    Detects a confirmed bearish belly setup (mirror of V3 bullish logic).
+
+    Used as: long-entry blocker + stronger exit signal for longs.
+    NOT used to open short positions.
+
+    Returns True when ALL of:
+    A. BEARISH TREND STRUCTURE
+       - EMA crossed below SMA within last crossover_window bars
+       - EMA still below SMA on current bar
+       - EMA slope negative (ema[-1] < ema[-1-slope_lookback])
+       - SMA slope not strongly rising (sma[-1] - sma[-1-slope_lookback] < 0.001 * close[-1])
+
+    B. CONTROLLED BEARISH BELLY / REBOUND
+       - bear_spread = SMA - EMA > 0
+       - current close is above recent 3-bar low (rebound exists)
+       - current close is below SMA (structure still bearish)
+       - bear_spread not collapsing sharply (change > -0.008 * close[-1] over 2 bars)
+
+    C. RELAXED BOLLINGER COMPRESSION (at least 2 of 3)
+       - upper band falling
+       - lower band rising
+       - width narrowing
+
+    D. RECENT REBOUND CONTEXT
+       - at least one of the last 2 candles is green (prior_close >= prior_open)
+
+    E. BEARISH CONFIRMATION
+       - current candle is red (close < open)
+       - AND at least one of:
+           * close < ema
+           * low < previous candle low
+           * close < previous candle midpoint
+    """
+    min_bars = crossover_window + slope_lookback + 5
+    if len(closes) < min_bars:
+        return False
+
+    # A. Bearish trend structure
+    crossover_bar = None
+    for k in range(1, crossover_window + 1):
+        idx_prev = -(k + 1)
+        idx_cur  = -k
+        try:
+            e_prev, s_prev = emas.iloc[idx_prev], smas.iloc[idx_prev]
+            e_cur,  s_cur  = emas.iloc[idx_cur],  smas.iloc[idx_cur]
+        except IndexError:
+            break
+        if any(math.isnan(x) for x in [e_prev, s_prev, e_cur, s_cur]):
+            continue
+        if e_prev >= s_prev and e_cur < s_cur:   # bearish crossover
+            crossover_bar = idx_cur
+            break
+
+    if crossover_bar is None:
+        return False
+    if emas.iloc[-1] >= smas.iloc[-1]:   # EMA must remain below SMA
+        return False
+
+    # EMA slope negative
+    e_now = emas.iloc[-1]; e_ago = emas.iloc[-1 - slope_lookback]
+    if math.isnan(e_now) or math.isnan(e_ago) or e_now >= e_ago:
+        return False
+
+    # SMA slope not strongly rising
+    s_now = smas.iloc[-1]; s_ago = smas.iloc[-1 - slope_lookback]
+    if math.isnan(s_now) or math.isnan(s_ago):
+        return False
+    sma_slope_per_bar = (s_now - s_ago) / slope_lookback
+    if sma_slope_per_bar > 0.001 * closes.iloc[-1]:
+        return False
+
+    # B. Bearish belly / rebound
+    bear_spread = smas.iloc[-1] - emas.iloc[-1]
+    if bear_spread <= 0:
+        return False
+
+    # Close above 3-bar low (rebound exists)
+    recent_low = closes.iloc[-4:-1].min()
+    if closes.iloc[-1] <= recent_low:
+        return False
+
+    # Close below SMA (still bearish structure)
+    if closes.iloc[-1] >= smas.iloc[-1]:
+        return False
+
+    # Bear spread not collapsing
+    if len(emas) >= 3 and len(smas) >= 3:
+        bear_spread_2_ago = smas.iloc[-3] - emas.iloc[-3]
+        bear_spread_change = bear_spread - bear_spread_2_ago
+        if bear_spread_change < -0.008 * closes.iloc[-1]:
+            return False
+
+    # C. Relaxed BB compression (at least 2 of 3)
+    ub_now = bb_uppers.iloc[-1]; ub_ago = bb_uppers.iloc[-1 - slope_lookback]
+    lb_now = bb_lowers.iloc[-1]; lb_ago = bb_lowers.iloc[-1 - slope_lookback]
+    if any(math.isnan(x) for x in [ub_now, ub_ago, lb_now, lb_ago]):
+        return False
+    bb_conds = [ub_now < ub_ago, lb_now > lb_ago, (ub_now - lb_now) < (ub_ago - lb_ago)]
+    if sum(bb_conds) < 2:
+        return False
+
+    # D. Recent rebound context: at least one green candle in last 2
+    prev_green  = closes.iloc[-2] >= opens.iloc[-2]
+    prev2_green = closes.iloc[-3] >= opens.iloc[-3] if len(closes) >= 3 else False
+    if not (prev_green or prev2_green):
+        return False
+
+    # E. Bearish confirmation: red candle + at least one sub-condition
+    curr_close = closes.iloc[-1]; curr_open = opens.iloc[-1]
+    if curr_close >= curr_open:   # must be red
+        return False
+
+    curr_low        = lows.iloc[-1]
+    prev_low_bar    = min(opens.iloc[-2], closes.iloc[-2])
+    prev_mid        = (opens.iloc[-2] + closes.iloc[-2]) / 2.0
+    confirmation    = (
+        curr_close < emas.iloc[-1]
+        or curr_low < prev_low_bar
+        or curr_close < prev_mid
+    )
+    if not confirmation:
+        return False
+
+    return True
+
+
+def ema_sma_bollinger_v4_buy_signal(
+    closes: pd.Series,
+    opens: pd.Series,
+    highs: pd.Series,
+    lows: pd.Series,
+    emas: pd.Series,
+    smas: pd.Series,
+    bb_uppers: pd.Series,
+    bb_lowers: pd.Series,
+    crossover_window: int = 8,
+    slope_lookback: int = 3,
+) -> bool:
+    """
+    EMA_SMA_Bollinger V4 buy signal.
+    = V3 bullish conditions + bearish belly must NOT be active.
+
+    Bullish logic: identical to V3.
+    Bearish blocker: if bearish belly is confirmed, suppress long entry.
+    """
+    # First check V3 bullish logic (same conditions)
+    bullish_ok = ema_sma_bollinger_v3_buy_signal(
+        closes=closes, opens=opens, highs=highs,
+        emas=emas, smas=smas,
+        bb_uppers=bb_uppers, bb_lowers=bb_lowers,
+        crossover_window=crossover_window,
+        slope_lookback=slope_lookback,
+    )
+    if not bullish_ok:
+        return False
+
+    # Bearish blocker: if bearish belly is confirmed, do not enter long
+    bearish_active = ema_sma_bollinger_bearish_belly(
+        closes=closes, opens=opens, lows=lows,
+        emas=emas, smas=smas,
+        bb_uppers=bb_uppers, bb_lowers=bb_lowers,
+        crossover_window=crossover_window,
+        slope_lookback=slope_lookback,
+    )
+    if bearish_active:
+        return False
+
+    return True
+
+
+def ema_sma_bollinger_v4_sell_signal(
+    closes: pd.Series,
+    opens: pd.Series,
+    lows: pd.Series,
+    emas: pd.Series,
+    smas: pd.Series,
+    bb_uppers: pd.Series,
+    bb_lowers: pd.Series,
+    slope_lookback: int = 3,
+) -> tuple[bool, str]:
+    """
+    EMA_SMA_Bollinger V4 sell signal.
+    = V3 exits + bearish belly confirmation = additional early exit.
+
+    Exits on ANY of:
+    A. Bearish EMA/SMA crossover
+    B. Close below both EMA and SMA
+    C. BB expanding AND close below EMA (failed recovery)
+    D. Confirmed bearish belly setup (additional exit vs V3)
+    """
+    if len(closes) < slope_lookback + 3:
+        return False, ""
+
+    e_now, s_now = emas.iloc[-1], smas.iloc[-1]
+    e_prev, s_prev = emas.iloc[-2], smas.iloc[-2]
+    c_now = closes.iloc[-1]
+
+    # A. Bearish crossover
+    if not any(math.isnan(x) for x in [e_prev, s_prev, e_now, s_now]):
+        if e_prev >= s_prev and e_now < s_now:
+            return True, "EMA crossed below SMA"
+
+    # B. Structure failure
+    if not any(math.isnan(x) for x in [e_now, s_now]):
+        if c_now < e_now and c_now < s_now:
+            return True, "Close below both EMA and SMA"
+
+    # C. Failed recovery
+    if len(bb_uppers) >= slope_lookback + 2 and len(bb_lowers) >= slope_lookback + 2:
+        ub_now = bb_uppers.iloc[-1]; ub_ago = bb_uppers.iloc[-1 - slope_lookback]
+        lb_now = bb_lowers.iloc[-1]; lb_ago = bb_lowers.iloc[-1 - slope_lookback]
+        if not any(math.isnan(x) for x in [ub_now, ub_ago, lb_now, lb_ago]):
+            bb_expanding = (ub_now - lb_now) > (ub_ago - lb_ago)
+            if bb_expanding and c_now < e_now:
+                return True, "BB expanding and close below EMA"
+
+    # D. Confirmed bearish belly (additional V4 exit)
+    bearish_active = ema_sma_bollinger_bearish_belly(
+        closes=closes, opens=opens, lows=lows,
+        emas=emas, smas=smas,
+        bb_uppers=bb_uppers, bb_lowers=bb_lowers,
+    )
+    if bearish_active:
+        return True, "Confirmed bearish belly setup"
+
+    return False, ""
+
